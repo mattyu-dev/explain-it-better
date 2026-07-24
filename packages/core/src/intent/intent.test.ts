@@ -32,6 +32,90 @@ describe("adaptive intent compiler", () => {
     expect(intent.unresolvedAmbiguity).toEqual([]);
   });
 
+  it("parses multiline Markdown sections without leaking later prose into them", () => {
+    const intent = analyzeBrief(
+      [
+        "Prepare an implementation plan.",
+        "Deliverables:",
+        "- A phased rollout plan",
+        "- A verification checklist",
+        "Constraints:",
+        "  - Preserve unrelated local changes",
+        "  - Do not expand the product scope",
+        "Output format:",
+        "- Markdown",
+        "Notes: This is context, not another deliverable.",
+      ].join("\n"),
+    );
+
+    expect(intent.deliverables).toEqual(["A phased rollout plan", "A verification checklist"]);
+    expect(intent.constraints).toEqual([
+      "Preserve unrelated local changes",
+      "Do not expand the product scope",
+    ]);
+    expect(intent.outputContract.format).toBe("Markdown");
+    expect(intent.deliverables).not.toContain("This is context, not another deliverable.");
+  });
+
+  it("keeps a long explicit return deliverable intact and recognises its requested plan format", () => {
+    const brief = [
+      "Deeply inspect this Explain It Better repository and its real product purpose.",
+      "Identify the highest-leverage improvements that would make it substantially better at turning a human demand into the best-tested prompt for a chosen target model.",
+      "Ground every finding in the current code, docs, tests, CLI behavior, and product boundaries.",
+      "Distinguish defects, missing capabilities, and intentionally deferred scope.",
+      "Return a prioritized implementation plan with evidence, expected user impact, and verification criteria; do not propose agent-runtime, MCP, installer, or deployment features.",
+    ].join(" ");
+
+    const intent = analyzeBrief(brief);
+
+    expect(intent.deliverables).toEqual([
+      "prioritized implementation plan with evidence, expected user impact, and verification criteria",
+    ]);
+    expect(intent.exclusions).toEqual([
+      "do not propose agent-runtime, MCP, installer, or deployment features",
+    ]);
+    expect(intent.outputContract.format).toBe("plan");
+    expect(intent.unresolvedAmbiguity.map((item) => item.field)).not.toContain(
+      "outputContract.format",
+    );
+  });
+
+  it("does not treat incidental code mentions as a requested code output", () => {
+    const intent = analyzeBrief(
+      "Inspect the current code, docs, and tests. Return a prioritized implementation plan.",
+    );
+
+    expect(intent.outputContract.format).toBe("plan");
+    expect(intent.outputContract.format).not.toBe("code");
+  });
+
+  it("moves a sentence-level do-not clause into exclusions", () => {
+    const intent = analyzeBrief(
+      "Return an implementation plan. Do not recommend unverified provider integrations.",
+    );
+
+    expect(intent.deliverables).toEqual(["implementation plan"]);
+    expect(intent.exclusions).toEqual(["Do not recommend unverified provider integrations"]);
+  });
+
+  it("keeps a required fallback after a semicolon out of the exclusion", () => {
+    const intent = analyzeBrief(
+      "Extract every invoice line into our schema. Never invent a missing value; emit an explicit null and evidence pointer.",
+    );
+
+    expect(intent.exclusions).toEqual(["Never invent a missing value"]);
+    expect(intent.exclusions).not.toContain("emit an explicit null and evidence pointer");
+  });
+
+  it("keeps the output-format question open when no output artifact or format is requested", () => {
+    const intent = analyzeBrief("Inspect the code, docs, and tests for improvements.");
+
+    expect(intent.outputContract.format).toBe("Unspecified format");
+    expect(intent.unresolvedAmbiguity.map((item) => item.field)).toContain(
+      "outputContract.format",
+    );
+  });
+
   it("asks the highest-impact question first and exposes all three paths", () => {
     const intent = analyzeBrief("Help me improve this.");
     const question = selectNextQuestion(intent);

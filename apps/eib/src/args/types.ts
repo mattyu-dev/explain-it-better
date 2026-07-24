@@ -19,6 +19,12 @@ export interface GlobalOptions {
 
 export type EvalMode = "static" | "proxy" | "live";
 export type EvalDepth = "quick" | "default" | "deep";
+/**
+ * An execution backend is intentionally named on every model-run command.
+ * `openai` is reserved for the isolated native Responses adapter; the local
+ * CLI backends remain useful for explicitly selected local target surfaces.
+ */
+export type ExecutionBackend = "codex" | "claude" | "openai";
 export type ExportFormat = "directory" | "clipboard";
 export type CandidateCount = 1 | 2 | 3;
 
@@ -58,6 +64,10 @@ export type CliCommand =
       maxCandidates: CandidateCount;
       /** Exact rendered target used for candidate evidence. */
       target?: string;
+      /** Named executor used only for an explicitly consented candidate run. */
+      backend?: ExecutionBackend;
+      depth?: EvalDepth;
+      allowExecution?: boolean;
       runs?: string;
       comparisons?: string;
       minimumImprovement?: number;
@@ -76,7 +86,7 @@ export type CliCommand =
       packagePath: string;
       mode: EvalMode;
       depth: EvalDepth;
-      backend?: "codex" | "claude";
+      backend?: ExecutionBackend;
       fixtures?: string;
       allowExecution: boolean;
     }

@@ -21,9 +21,12 @@ not an `npm publish` operation. Every workspace has `private: true` as a guard.
 3. Move relevant notes from `Unreleased` into a dated version heading in
    `CHANGELOG.md`.
 4. Run `npm ci` followed by `npm run release:check` locally.
-5. Open a pull request. Merge only after the CI release gate and required
+5. Review the public optimizer claims against the shipped behavior: structured
+   demand preservation, target-aware variants, demand-specific held-out
+   evaluation, evidence-bound promotion, and any native execution boundary.
+6. Open a pull request. Merge only after the CI release gate and required
    review are green.
-6. Tag the merged commit as `vX.Y.Z` and create a private GitHub Release whose
+7. Tag the merged commit as `vX.Y.Z` and create a private GitHub Release whose
    notes match the changelog entry.
 
 ## After release
@@ -33,6 +36,17 @@ not an `npm publish` operation. Every workspace has `private: true` as a guard.
 - Record any known limitations in the release notes. Do not describe proxy or
   static evaluation as target-model validation, and do not describe a
   best-tested prompt as universally perfect.
+- If native target runs are included, record the supported target/executor,
+  isolation conformance version, required explicit consent, and evidence scope.
+  Do not imply that native evidence transfers to another prompt hash, model
+  version, target surface, or held-out suite.
+- For any release that changes executed candidate runs, verify the published
+  `--backend` contract, explicit consent requirement, credential handling, and
+  candidate × case × repetition cost multiplier. Do not label Codex or Claude
+  proxy judging as native target execution.
+- For native OpenAI live evaluation, verify the complete-static-evidence
+  prerequisite, reviewed Responses-target gate, and the two-request
+  target-plus-judge cost multiplier per target × case × repetition.
 - Do not publish to npm. If public or registry distribution is ever approved,
   first change the package privacy policy, add provenance/registry controls,
   and review the release process separately.

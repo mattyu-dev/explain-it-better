@@ -1,6 +1,6 @@
 import type { z } from "zod";
 
-export type BackendId = "codex" | "claude" | "hermes" | "kimi";
+export type BackendId = "codex" | "claude" | "openai" | "hermes" | "kimi";
 export type BackendRole = "compiler" | "target_only";
 
 export type LocalBackendErrorCode =
@@ -47,13 +47,13 @@ export interface StructuredRunRequest<T> {
 }
 
 export interface StructuredRunResult<T> {
-  backend: "codex" | "claude";
+  backend: "codex" | "claude" | "openai";
   data: T;
   durationMs: number;
 }
 
 export interface LocalCompilerBackend {
-  readonly id: "codex" | "claude";
+  readonly id: "codex" | "claude" | "openai";
   readonly role: "compiler";
   readonly executable: string;
   runStructured<T>(request: StructuredRunRequest<T>): Promise<StructuredRunResult<T>>;

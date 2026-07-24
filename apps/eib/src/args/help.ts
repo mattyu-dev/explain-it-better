@@ -20,12 +20,16 @@ Options:
   optimize: `Usage: eib optimize [package] [options]
 
 Generate one to three demand-preserving prompt candidates and a held-out evaluation plan.
+With a named --backend and explicit consent, run every candidate on the same held-out suite.
 With --runs, make a fail-closed promotion recommendation from imported evidence.
 The source package and its verification status are never changed.
 
 Options:
   --max-candidates 1|2|3     Candidate count (default: 3)
   --target <id>              Exact target to test; required when the package has several
+  --backend codex|claude|openai  Explicit candidate executor; never inferred
+  --allow-execution          Required consent before any candidate model call
+  --depth quick|default|deep Repetitions for an executed candidate run
   --runs <json-file>         Candidate evaluation runs for every generated candidate
   --comparisons <json-file>  Optional blinded comparisons; both orders required per case
   --minimum-improvement <n>  Strict score delta needed to promote (default: 0)
@@ -46,9 +50,9 @@ The package defaults to .eib/package.json.
 Options:
   --mode static|proxy|live
   --depth quick|default|deep  Repetitions for proxy/live model evaluation
-  --backend codex|claude  Required evaluator for proxy mode
+  --backend codex|claude|openai  Required evaluator; live mode requires openai
   --fixtures <json-file>  Static outputs keyed by every evaluation case ID
-  --allow-execution       Explicit consent required before a proxy model run
+  --allow-execution       Explicit consent required before any model run
   --json                  Emit one machine-readable JSON document`,
   export: `Usage: eib export [package] --format directory|clipboard [options]
 

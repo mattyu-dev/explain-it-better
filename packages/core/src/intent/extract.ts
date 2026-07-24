@@ -40,6 +40,10 @@ const SECTION_ALIASES: Readonly<Record<string, string>> = {
   product: "product",
   assets: "assets",
   "source assets": "assets",
+  output: "outputFormat",
+  "output format": "outputFormat",
+  format: "outputFormat",
+  "response format": "outputFormat",
   duration: "duration",
   distribution: "distribution",
   channel: "distribution",
@@ -62,23 +66,58 @@ function splitList(value: string): string[] {
 
 function parseSections(brief: string): Map<string, string[]> {
   const sections = new Map<string, string[]>();
+  let activeSection: string | undefined;
+  let acceptsPlainContinuation = false;
+
+  const append = (name: string, value: string): void => {
+    const values = splitList(value);
+    if (values.length > 0) {
+      sections.set(name, [...(sections.get(name) ?? []), ...values]);
+    }
+  };
+
   for (const rawLine of brief.split(/\r?\n/u)) {
     const line = rawLine.trim();
-    const match = /^(?:[-*]\s*)?([a-z][a-z ]{1,30})\s*:\s*(.+)$/iu.exec(line);
-    if (!match) {
+    if (!line) {
+      activeSection = undefined;
+      acceptsPlainContinuation = false;
       continue;
     }
 
-    const rawName = match[1];
-    const rawValue = match[2];
-    if (!rawName || !rawValue) {
+    // Support both compact sections (`Deliverables: checklist`) and ordinary
+    // Markdown sections (`Deliverables:` followed by one or more list items).
+    // We only recognise known headings, so prose such as "Note: ..." cannot
+    // accidentally become a structured requirement.
+    const match = /^(?:[-*]\s*)?([a-z][a-z /-]{0,40})\s*:\s*(.*)$/iu.exec(line);
+    const rawName = match?.[1];
+    const name = rawName ? SECTION_ALIASES[rawName.toLowerCase().replace(/\s+/gu, " ")] : undefined;
+    if (name) {
+      activeSection = name;
+      const rawValue = match?.[2]?.trim();
+      acceptsPlainContinuation = !rawValue;
+      if (rawValue) {
+        append(name, rawValue);
+      }
       continue;
     }
-    const name = SECTION_ALIASES[rawName.toLowerCase()];
-    if (!name) {
+
+    if (match) {
+      // An unrecognised heading starts a new prose section. Do not leak it
+      // into the preceding structured field.
+      activeSection = undefined;
+      acceptsPlainContinuation = false;
       continue;
     }
-    sections.set(name, [...(sections.get(name) ?? []), ...splitList(rawValue)]);
+
+    if (
+      activeSection &&
+      (acceptsPlainContinuation || /^\s+\S/u.test(rawLine) || /^[-*]\s+/u.test(line))
+    ) {
+      // A section may be expressed as a bullet list or as a wrapped paragraph.
+      // Keep the whole value: downstream prompt generation must not silently
+      // truncate a user's requested deliverable.
+      append(activeSection, line.replace(/^[-*]\s*/, ""));
+    }
   }
   return sections;
 }
@@ -92,12 +131,34 @@ function inferObjective(brief: string): string {
 }
 
 function inferDeliverables(brief: string): string[] {
-  const match =
-    /\b(?:create|build|write|produce|design|generate|implement|make|draft|analy[sz]e)\s+(?:me\s+|an?\s+|the\s+)?([^.!?\n]{2,100})/iu.exec(
-      brief,
-    );
-  const value = match?.[1]?.trim();
-  return value ? [value] : [];
+  // Requests such as "make it better" describe a goal, not an artifact. Give
+  // an explicit return/provide/deliver clause priority when it exists, then
+  // fall back to an authoring verb. Values deliberately run to the sentence or
+  // line boundary rather than an arbitrary character limit.
+  const patterns = [
+    /\b(?:return|provide|deliver|present)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+)?([^.!?\n]{2,})/iu,
+    /\b(?:create|build|write|produce|design|generate|implement|draft|analy[sz]e|make(?!\s+(?:it|this|that)\b))\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+)?([^.!?\n]{2,})/iu,
+  ];
+  for (const pattern of patterns) {
+    const value = pattern
+      .exec(brief)?.[1]
+      ?.replace(/(?:[;,]\s*(?:but\s+)?)\b(?:do not|don't|never|avoid|exclude)\b.*$/iu, "")
+      .trim();
+    if (value) {
+      return [value];
+    }
+  }
+  return [];
+}
+
+function inferExclusions(brief: string): string[] {
+  const matches = brief.matchAll(
+    // A semicolon often separates a prohibition from its required fallback
+    // (for example, "Never invent a value; emit null with evidence").  The
+    // fallback must remain a requirement, not become part of the exclusion.
+    /(?:^|[.;\n])\s*((?:do not|don't|never|avoid|exclude)\b[^.!?\n;]*)/giu,
+  );
+  return unique([...matches].map((match) => match[1] ?? ""));
 }
 
 function inferLanguage(brief: string): string {
@@ -115,22 +176,25 @@ function inferLanguage(brief: string): string {
 }
 
 function inferFormat(brief: string): string | undefined {
-  const formats = [
-    "JSON",
-    "JSONL",
-    "Markdown",
-    "HTML",
-    "CSV",
-    "table",
-    "report",
-    "email",
-    "code",
-    "plan",
-    "presentation",
-  ];
-  return formats.find((format) =>
-    new RegExp(`\\b${format.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu").test(brief),
+  const formats = "JSONL|JSON|Markdown|HTML|CSV|table|report|email|code|plan|presentation";
+  const explicitFormat = new RegExp(
+    `\\b(?:output|response|answer)(?:\\s+format)?\\s*(?::|as|in)\\s*(?:an?\\s+)?(?:valid\\s+)?(${formats})\\b|\\bformat(?:ted)?\\s+(?:as|in)\\s+(?:an?\\s+)?(?:valid\\s+)?(${formats})\\b|\\b(?:return|respond|reply|output|provide|present|deliver)\\s+(?:it\\s+)?(?:as|in|with)\\s+(?:an?\\s+)?(?:valid\\s+)?(${formats})\\b`,
+    "iu",
   );
+  const explicitMatch = explicitFormat.exec(brief);
+  const explicitValue = explicitMatch?.slice(1).find((value) => value !== undefined);
+  if (explicitValue) {
+    return explicitValue;
+  }
+
+  // A format can also be explicit in the direct object of an authoring verb.
+  // This intentionally does not scan arbitrary mentions (for example,
+  // "inspect the code, docs, and tests" is not a request for code output).
+  const artifactMatch = new RegExp(
+    `\\b(?:return|provide|deliver|present|create|build|write|produce|design|generate|implement|draft|make)\\s+(?:me\\s+|us\\s+)?(?:an?\\s+|the\\s+)?(?:prioritized\\s+|detailed\\s+|concise\\s+|complete\\s+|actionable\\s+|implementation\\s+|executive\\s+)*(${formats})\\b`,
+    "iu",
+  ).exec(brief);
+  return artifactMatch?.[1];
 }
 
 function inferRisk(brief: string): IntentContract["risk"] {
@@ -251,8 +315,10 @@ export function extractIntent(brief: string, hints: IntentHints = {}): IntentCon
   );
   const explicitInputs = unique(hints.inputs ?? sectionInputs);
   const explicitPreferences = unique(hints.preferences ?? sectionPreferences);
+  const explicitExclusions = unique(hints.exclusions ?? sections.get("exclusions") ?? inferExclusions(normalizedBrief));
   const explicitFormat =
-    hints.outputFormat ?? (hints.outputSchema ? "JSON" : inferFormat(normalizedBrief));
+    hints.outputFormat ??
+    (hints.outputSchema ? "JSON" : sections.get("outputFormat")?.join("; ") ?? inferFormat(normalizedBrief));
   const unresolved: IntentContract["unresolvedAmbiguity"] = [];
 
   if (explicitAudience.length === 0) {
@@ -374,7 +440,7 @@ export function extractIntent(brief: string, hints: IntentHints = {}): IntentCon
     ],
     constraints: unique(hints.constraints ?? sections.get("constraints") ?? []),
     preferences: explicitPreferences,
-    exclusions: unique(hints.exclusions ?? sections.get("exclusions") ?? []),
+    exclusions: explicitExclusions,
     assumptions: [],
     successCriteria:
       explicitSuccess.length > 0 ? explicitSuccess : ["Success criteria not yet specified"],

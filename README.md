@@ -2,19 +2,21 @@
 
 Explain It Better (`eib`) is a local, terminal-first, target-aware prompt
 optimizer. It turns a human demand into a paste-ready prompt for a named model
-or surface, while preserving the reasoning needed to judge whether that prompt
-is actually the best-tested option.
+or surface. Its output is an evidence bundle: a structured interpretation of
+the demand, target-specific prompt candidates, a task-specific held-out suite,
+and any evidence used to select a winner.
 
 ```text
-human demand → clarify intent → generate prompt variants → shared evaluation
-             → promote the best-tested prompt → paste-ready export
+human demand → structured intent → target-aware variants → demand-specific
+held-out evaluation → evidence-bound promotion → paste-ready export
 ```
 
 There is no universal “perfect prompt.” A prompt earns the **best-tested**
 label only for its frozen demand, target, and shared held-out evaluation set:
 it must show a measurable improvement over the baseline with no critical
-regression. Static checks and proxy judgments are clearly labeled; neither is
-presented as proof of target-model quality.
+regression. The evidence is bound to the exact candidate prompt hash, target,
+and case suite. Static checks and proxy judgments are clearly labeled; neither
+is presented as proof of target-model quality.
 
 The reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI, DeepSeek,
 Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally excluded.
@@ -29,8 +31,11 @@ npm run build
 node apps/eib/dist/cli.js
 ```
 
-Start with a demand, choose the target you want to paste into, and accept the
-recommended clarification assumptions for a quick first prompt:
+Start with a demand and target. EIB parses the demand into visible fields such
+as outcome, audience, deliverable, constraints, inputs, exclusions, success
+criteria, and output contract. It asks only when a material field cannot be
+resolved safely; `--fast` accepts its visible assumptions for a quick first
+prompt:
 
 ```bash
 node apps/eib/dist/cli.js new \
@@ -48,13 +53,27 @@ Without it, `new` asks the single highest-information question and returns
 exit code `3`, so the demand stays human-controlled rather than silently
 guessed.
 
-To test variants fairly, use the same evaluation cases for every candidate:
+To optimize with imported results, generate the target-aware candidate plan and
+evaluate every candidate on the same demand-specific held-out cases:
 
 ```bash
 node apps/eib/dist/cli.js optimize .eib/packages/research-memo \
   --max-candidates 3 \
   --runs results.json \
   --comparisons comparisons.json
+```
+
+Or authorize a reproducible candidate run directly. This example makes paid
+OpenAI Responses API calls; see [Executed candidate evidence](#executed-candidate-evidence)
+before running it:
+
+```bash
+node apps/eib/dist/cli.js optimize .eib/packages/research-memo \
+  --target openai-gpt-5.6-api \
+  --backend openai \
+  --allow-execution \
+  --depth quick \
+  --output evidence.json
 ```
 
 The runnable walkthrough in
@@ -64,18 +83,26 @@ proxy evidence.
 
 ## The optimizer loop
 
-1. **Clarify the demand.** Capture the outcome, audience, constraints,
-   exclusions, context, and desired output. Keep assumptions visible.
-2. **Create a target-aware baseline.** EIB applies reviewed target knowledge
-   and renders the prompt for the exact model and surface selected.
-3. **Generate intent-preserving variants.** `eib optimize` proposes a small
-   candidate set and a held-out comparison plan; it does not change the
-   baseline or relabel it automatically.
-4. **Evaluate every candidate on the same cases.** Supply complete results and
-   comparisons. A recommendation is emitted only when the promotion gate
-   clears its improvement and regression rules.
-5. **Export the winning prompt.** Use `eib export --format clipboard` for a
-   paste-ready result or `--format directory` for its reproducible evidence
+1. **Structure the demand.** EIB extracts the requested outcome, audience,
+   deliverables, source inputs, hard constraints, exclusions, success criteria,
+   and output contract. It retains the original wording and makes any
+   assumption or unresolved ambiguity visible.
+2. **Create a target-aware baseline.** EIB applies reviewed knowledge for the
+   exact provider, model, endpoint, and surface selected.
+3. **Explore distinct prompt strategies.** `eib optimize` creates a baseline
+   plus intent-preserving variants whose structure and target-specific
+   guidance differ in documented ways. It never silently rewrites the frozen
+   demand.
+4. **Build and run a demand-specific held-out suite.** Cases and rubrics are
+   derived from the demand's deliverable, constraints, risks, and success
+   criteria. Every candidate is evaluated on the identical case/repetition
+   keys, so results are comparable.
+5. **Promote only from bound evidence.** A winner requires complete evidence
+   for the generated candidates, the selected target, exact candidate hashes,
+   and the declared held-out suite—plus measurable improvement and no critical
+   regression. A recommendation never overwrites the source package.
+6. **Export the winning prompt.** Use `eib export --format clipboard` for a
+   paste-ready result or `--format directory` for the reproducible evidence
    bundle.
 
 The resulting bundle is useful evidence, not an application to deploy. It
@@ -89,12 +116,17 @@ eib
 eib new [brief] [--target <id>] [--fast] [--output <directory>]
         [--schema '<JSON object>']
 eib improve <package> --feedback <correction> [--output <directory>]
-eib optimize [package] [--max-candidates 1|2|3] [--runs <json-file>]
-             [--comparisons <json-file>] [--minimum-improvement <n>]
+eib optimize [package] [--target <id>] [--max-candidates 1|2|3]
+             [--runs <json-file> [--comparisons <json-file>]
+              | --backend codex|claude|openai --allow-execution
+                [--depth quick|default|deep]]
+             [--minimum-improvement <n>] [--output <evidence.json>]
 eib compile [package] --target <id> [--output <directory>]
-eib eval [package] --mode static|proxy|live [--fixtures <json-file>]
+eib eval [package] --mode static [--fixtures <json-file>]
+eib eval [package] --mode proxy --backend codex|claude --allow-execution
          [--depth quick|default|deep]
-         [--backend codex|claude --allow-execution]
+eib eval [package] --mode live --backend openai --allow-execution
+         [--depth quick|default|deep]
 eib export [package] --format clipboard|directory [--output <directory>]
 eib doctor
 eib knowledge check|stage
@@ -114,18 +146,80 @@ evidence needed to reproduce the result.
 
 `eib eval --mode static` checks the bundle, compatibility, and supplied
 deterministic fixtures. It establishes that those checks pass, not that a
-model response is high quality.
+model response is high quality. Static evidence can support package integrity,
+but cannot by itself promote a prompt.
 
 `eib eval --mode proxy` can ask an authenticated local Codex or Claude CLI to
 judge cases when `--allow-execution` is explicit. This is independent evaluator
-evidence, not execution by the selected target model. `--mode live` remains
-fail-closed until a native target evaluator can provide isolated,
-reproducible target-model evidence.
+evidence, not execution by the selected target model.
+
+Before any proxy or live evaluation, static validation must have produced
+**complete passing evidence for every evaluation-case/compiled-target pair**.
+Run it with fixtures and persist the resulting package first:
+
+```bash
+node apps/eib/dist/cli.js eval .eib/packages/research-memo \
+  --mode static \
+  --fixtures static-fixtures.json
+```
+
+For supported OpenAI Responses API targets, native evaluation is then explicit:
+
+```bash
+node apps/eib/dist/cli.js eval .eib/packages/research-memo \
+  --mode live \
+  --backend openai \
+  --allow-execution \
+  --depth quick
+```
+
+Live evaluation executes the target prompt and separately asks the same target
+for a schema-constrained judgment. A complete passing live run advances the
+package to `target_evaluated`; failed, unsupported, or incomplete runs do not.
+It requires a non-empty `OPENAI_API_KEY` in the invoking environment and a
+reviewed OpenAI target that uses the Responses API and that the account may
+call. Tools are disabled and responses are not stored. Missing credentials,
+unsupported profiles, or incomplete static evidence fail closed.
+
+## Executed candidate evidence
+
+`eib optimize` has two evidence paths. Imported `--runs` (and optional blinded
+`--comparisons`) keeps model execution outside EIB. Alternatively, a named
+`--backend` plus `--allow-execution` runs every candidate against the same
+held-out suite. The flags are mutually exclusive: EIB never silently combines
+unverifiable imported runs with a live execution.
+
+- `--backend codex` and `--backend claude` use the selected local CLI as a
+  **proxy judge**. Their evidence is useful for comparison but is not proof of
+  the named target model's performance.
+- `--backend openai` uses the OpenAI Responses API for an OpenAI target. It
+  requires an explicit, non-empty `OPENAI_API_KEY` in the invoking environment
+  and a target model your account is authorized to call. The key is not stored
+  in the package or preferences. Requests disable tools and response storage.
+  Unsupported targets or missing credentials fail closed.
+
+Execution may incur model charges. EIB runs candidates sequentially, once for
+each candidate × held-out case × repetition: `quick` is 1 repetition,
+`default` is 3, and `deep` is 5. Start with `quick`, inspect the generated
+suite and target model, and choose `--max-candidates` and `--depth` knowingly.
+Native `eval --mode live` makes two OpenAI Responses requests per compiled
+target × case × repetition (one target response and one structured judge), so
+it has a distinct cost multiplier. Check your model's current pricing and
+account limits before authorizing either path.
+The recorded backend, model, timing, prompt hash, case, repetition, and
+observable evidence make the resulting comparison auditable—but they do not
+turn it into a universal or permanent quality claim.
+
+Native target execution is therefore optional, explicitly authorized, and
+limited to the target, exact prompt, and suite recorded in its evidence. It is
+not a guarantee for another model, future version, or task.
 
 The verification report distinguishes `compiled`, `statically_validated`,
 `proxy_evaluated`, and `target_evaluated`; a rerun that replaces evidence also
-invalidates the affected earlier claim. Only the promotion gate may call a
-candidate **best tested**, and only with complete comparable results.
+invalidates the affected earlier claim. Promotion evidence records the frozen
+demand, target, case-suite identity, candidate prompt hashes, scores, and
+provenance. Only the promotion gate may call a candidate **best tested**, and
+only with complete comparable results.
 
 ## Target profiles and knowledge
 

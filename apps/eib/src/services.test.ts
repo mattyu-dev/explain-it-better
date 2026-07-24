@@ -283,7 +283,7 @@ describe("CLI services", () => {
     }
   });
 
-  it("rejects live target evaluation before package or backend access", async () => {
+  it("rejects a non-native backend before live package access", async () => {
     const services = createCliServices();
     await expect(
       services.execute(
@@ -299,11 +299,7 @@ describe("CLI services", () => {
         new AbortController().signal,
       ),
     ).rejects.toMatchObject({
-      exitCode: 69,
-      details: {
-        requestedMode: "live",
-        verificationRecorded: false,
-      },
+      exitCode: 2,
     });
   });
 
@@ -345,6 +341,14 @@ describe("CLI services", () => {
         candidates: Array<{ id: string; promptHash: string }>;
       };
       expect(plan.candidates).toHaveLength(2);
+      const importedProvenance = {
+        backendId: "fixture-import",
+        runnerId: "fixture-import-v1",
+        modelId: "fixture-model",
+        runId: "00000000-0000-4000-8000-000000000001",
+        evaluatedAt: "2026-01-01T00:00:00.000Z",
+        observableEvidence: ["Fixture result was recorded."],
+      };
 
       await writeFile(
         runsPath,
@@ -358,6 +362,7 @@ describe("CLI services", () => {
           passed: true,
           criticalRegression: false,
           latencyMs: 10,
+          provenance: importedProvenance,
         })))}\n`,
         "utf8",
       );
@@ -385,6 +390,7 @@ describe("CLI services", () => {
           passed: true,
           criticalRegression: false,
           latencyMs: 10,
+          provenance: importedProvenance,
         },
         {
           candidateId: plan.candidates[1]!.id,
@@ -396,6 +402,7 @@ describe("CLI services", () => {
           passed: true,
           criticalRegression: false,
           latencyMs: 10,
+          provenance: importedProvenance,
         },
       ]);
       await writeFile(runsPath, `${JSON.stringify(runs)}\n`, "utf8");
@@ -422,6 +429,88 @@ describe("CLI services", () => {
       });
       const sourceAfter = await readPromptPackage(packageDirectory);
       expect(sourceAfter).toEqual(sourceBefore);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("executes every candidate on the identical demand-derived suite only after explicit consent", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-optimize-execute-"));
+    const packageDirectory = join(root, "package");
+    const invocations: string[] = [];
+    const services = createCliServices({
+      candidateBackendFactory: () => ({
+        id: "codex",
+        role: "compiler",
+        executable: "test-executor",
+        async runStructured(request) {
+          await Promise.resolve();
+          invocations.push(request.prompt);
+          return {
+            backend: "codex",
+            durationMs: 7,
+            data: request.schema.parse({
+              score: 0.8,
+              passed: true,
+              criticalRegression: false,
+              evidence: ["All declared properties were addressed."],
+            }),
+          };
+        },
+      }),
+    });
+    try {
+      await services.execute(
+        {
+          name: "new",
+          global: { json: true },
+          brief: "Write a concise Markdown checklist for a product manager.",
+          fast: true,
+          targets: ["openai-gpt-5.6-api"],
+          output: packageDirectory,
+        },
+        new AbortController().signal,
+      );
+      const source = await readPromptPackage(packageDirectory);
+      const result = await services.execute(
+        {
+          name: "optimize",
+          global: { json: true },
+          packagePath: packageDirectory,
+          maxCandidates: 2,
+          target: "openai-gpt-5.6-api",
+          backend: "openai",
+          allowExecution: true,
+          depth: "quick",
+        },
+        new AbortController().signal,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(invocations).toHaveLength(source.evals.length * 2);
+      expect(invocations.every((prompt) => prompt.includes("Held-out evaluation case follows"))).toBe(true);
+      expect(result.data).toMatchObject({
+        execution: {
+          backend: "openai",
+          targetId: "openai-gpt-5.6-api",
+          repetitions: 1,
+          consented: true,
+        },
+      });
+      const runs =
+        typeof result.data === "object" && result.data !== null && "runs" in result.data
+          ? result.data.runs
+          : undefined;
+      if (!Array.isArray(runs)) {
+        throw new Error("The automatic candidate-run result must expose its recorded runs.");
+      }
+      expect(runs.some((run: unknown) =>
+        typeof run === "object" &&
+        run !== null &&
+        "targetId" in run &&
+        "latencyMs" in run &&
+        run.targetId === "openai-gpt-5.6-api" &&
+        run.latencyMs === 7,
+      )).toBe(true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

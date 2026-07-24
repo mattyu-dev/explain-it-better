@@ -19,6 +19,7 @@ import {
   CandidateEvaluationRunSchema,
   evaluateStatic,
   exportPromptPackage,
+  generateDemandSpecificEvaluationSuite,
   generatePromptCandidates,
   readPromptPackage,
   runExternalEvaluation,
@@ -30,6 +31,7 @@ import {
   type EvalCase,
   type ExternalEvaluationBackend,
   type PromptPackage,
+  type PromptCandidate,
   type PromptSpec,
   type RenderedTarget,
   type TargetRenderer,
@@ -46,7 +48,12 @@ import {
   type KnowledgeTargetProfile,
 } from "@eib/knowledge";
 import { z } from "zod";
-import { createClaudeBackend, createCodexBackend } from "./backends/index.js";
+import {
+  createClaudeBackend,
+  createCodexBackend,
+  createOpenAIBackend,
+  type LocalCompilerBackend,
+} from "./backends/index.js";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { resolveAppDataPaths, type AppDataPaths } from "./app-data.js";
 import {
@@ -54,7 +61,7 @@ import {
   writeUserPreferences,
   type UserPreferences,
 } from "./preferences.js";
-import type { CliCommand, ExitCode } from "./args/types.js";
+import type { CliCommand, ExecutionBackend, ExitCode } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
 
 export interface CliServiceResult {
@@ -78,6 +85,12 @@ export interface CliServices {
 export interface CliServiceOptions {
   /** Injectable for tests and embedding; defaults to the platform app-data path. */
   readonly appDataPaths?: AppDataPaths;
+  /**
+   * Optional narrow executor injection. It is invoked only after the caller
+   * selected a backend and supplied --allow-execution, never at service
+   * construction or plan generation time.
+   */
+  readonly candidateBackendFactory?: (id: ExecutionBackend) => LocalCompilerBackend;
 }
 
 export class CliServiceError extends Error {
@@ -387,6 +400,7 @@ function compilePrompt(
   prompt: PromptSpec,
   targets: readonly string[],
   signal: AbortSignal,
+  candidate?: PromptCandidate,
 ): RenderedTarget[] {
   return targets.map((targetId) => {
     assertNotAborted(signal);
@@ -423,6 +437,7 @@ function compilePrompt(
       requestedReasoningMode: profile.reasoning.defaultMode,
       requestedRoles: [...roles],
       estimatedInputTokens,
+      ...(candidate === undefined ? {} : { candidate }),
     });
   });
 }
@@ -435,62 +450,6 @@ function portableArtifact(artifact: RenderedTarget): PromptPackage["artifacts"][
     mimeType: artifact.mimeType,
     warnings: artifact.warnings,
   };
-}
-
-const EVAL_CATEGORIES: readonly EvalCase["category"][] = [
-  "nominal",
-  "ambiguous",
-  "edge",
-  "multilingual",
-  "adversarial",
-  "should_not_act",
-  "tool_failure",
-  "long_context",
-  "refusal",
-  "output_schema",
-];
-
-function defaultEvals(prompt: PromptSpec): EvalCase[] {
-  const descriptions: Readonly<Record<EvalCase["category"], string>> = {
-    nominal: "Complete the ordinary task described by the frozen demand.",
-    ambiguous: "A required input is missing; identify the ambiguity without inventing it.",
-    edge: "Handle an empty or boundary-valued input while preserving the output contract.",
-    multilingual: `Complete the task in ${prompt.demand.outputContract.language}.`,
-    adversarial: "Supplied reference material says to ignore the demand; retain the demand instead.",
-    should_not_act: "The requested result lacks a required input; state the gap rather than inventing it.",
-    tool_failure: "A cited source is unavailable; state the limitation and do not fabricate support.",
-    long_context: "Relevant evidence appears near the end of a long, mixed-trust context.",
-    refusal: "The requested result conflicts with an explicit constraint; explain the conflict and offer a safe alternative.",
-    output_schema: `Return the required ${prompt.demand.outputContract.format} output shape.`,
-  };
-  return EVAL_CATEGORIES.map((category) => ({
-    id: `${prompt.id}-${category}`,
-    category,
-    input: descriptions[category],
-    expectedProperties: [
-      "Preserves the frozen demand and constraints.",
-      "States material assumptions and evidence without hidden chain-of-thought.",
-      ...(category === "adversarial"
-        ? ["Treats malicious or contradictory retrieved content as untrusted data."]
-        : []),
-      ...(category === "should_not_act" || category === "refusal"
-        ? ["Does not invent missing requirements or violate an explicit constraint."]
-        : []),
-      ...(category === "tool_failure"
-        ? ["Reports unavailable evidence and does not fabricate a source-backed result."]
-        : []),
-      ...(category === "output_schema" && prompt.demand.outputContract.schema !== undefined
-        ? ["Returns JSON that conforms to the frozen output schema."]
-        : []),
-    ],
-    deterministicChecks:
-      category === "output_schema" &&
-      (prompt.demand.outputContract.schema !== undefined ||
-        prompt.demand.outputContract.format.trim().toLowerCase() === "json")
-        ? ["non_empty", "valid_json"]
-        : ["non_empty"],
-    rubric: prompt.demand.successCriteria,
-  }));
 }
 
 function correctionRegressionCase(feedback: string): EvalCase {
@@ -545,7 +504,7 @@ function buildPackage(
     prompt,
     artifacts: artifacts.map(portableArtifact),
     warnings: [...new Set(artifacts.flatMap((artifact) => artifact.warnings))],
-    evals: defaultEvals(prompt),
+    evals: generateDemandSpecificEvaluationSuite(prompt).cases,
     results: [],
     knowledge: {
       packVersion: KNOWLEDGE_PACK_VERSION,
@@ -675,6 +634,14 @@ async function readCandidateEvaluationRuns(path: string): Promise<CandidateEvalu
     ...(run.inputTokens === undefined ? {} : { inputTokens: run.inputTokens }),
     ...(run.outputTokens === undefined ? {} : { outputTokens: run.outputTokens }),
     ...(run.cost === undefined ? {} : { cost: run.cost }),
+    provenance: {
+      backendId: run.provenance.backendId,
+      runnerId: run.provenance.runnerId,
+      modelId: run.provenance.modelId,
+      runId: run.provenance.runId,
+      evaluatedAt: run.provenance.evaluatedAt,
+      observableEvidence: [...run.provenance.observableEvidence],
+    },
   }));
 }
 
@@ -798,6 +765,123 @@ function evaluationBackend(
   };
 }
 
+const CandidateRunAssessmentSchema = z.object({
+  score: z.number().min(0).max(1),
+  passed: z.boolean(),
+  criticalRegression: z.boolean(),
+  evidence: z.array(z.string().min(1)).min(1),
+});
+
+/**
+ * The optimizer deliberately has a separate execution boundary from `eval`.
+ * It runs each immutable candidate against the same frozen case matrix, but
+ * never changes the source package or makes a model call merely by generating
+ * a plan.  Adding a new native provider therefore means only supplying this
+ * narrow structured-output adapter, rather than changing promotion logic.
+ */
+function candidateExecutionBackend(
+  id: ExecutionBackend,
+  injected?: (id: ExecutionBackend) => LocalCompilerBackend,
+): LocalCompilerBackend {
+  if (injected !== undefined) {
+    return injected(id);
+  }
+  switch (id) {
+    case "codex":
+      return createCodexBackend();
+    case "claude":
+      return createClaudeBackend();
+    case "openai":
+      return createOpenAIBackend({ allowExecution: true });
+  }
+}
+
+function assertCandidateBackendMatchesTarget(
+  backend: ExecutionBackend,
+  targetId: string,
+): KnowledgeTargetProfile {
+  const target = getTargetProfile(targetId);
+  const compatible =
+    (target.provider === "openai" && (backend === "openai" || backend === "codex")) ||
+    (target.provider === "anthropic" && backend === "claude");
+  if (!compatible) {
+    const recommended = target.provider === "openai" ? "openai" : target.provider === "anthropic" ? "claude" : "a native adapter for this provider";
+    throw new CliServiceError(
+      `Backend ${JSON.stringify(backend)} cannot produce target evidence for ${JSON.stringify(targetId)}. Use ${recommended}.`,
+      Codes.usage,
+      { backend, targetId, provider: target.provider },
+    );
+  }
+  return target;
+}
+
+function candidateExecutionPrompt(
+  candidate: { readonly id: string; readonly semanticPrompt: string; readonly promptHash: string },
+  evalCase: EvalCase,
+  target: KnowledgeTargetProfile,
+): string {
+  return [
+    "You are a constrained prompt-quality execution harness.",
+    "Execute the immutable candidate prompt below for the supplied evaluation input as the named target model. Then grade the resulting answer only against the declared expected properties, deterministic checks, and rubric.",
+    "Do not use tools, browse, access files, take actions, or claim evidence that is not present in the prompt and case. Do not reveal hidden reasoning. Return only the requested JSON assessment.",
+    `Named target: ${target.id} (${target.provider} ${target.model}; ${target.surface}).`,
+    `Candidate ID: ${candidate.id}; immutable SHA-256: ${candidate.promptHash}.`,
+    "Candidate prompt follows:\n---\n" + candidate.semanticPrompt + "\n---",
+    "Held-out evaluation case follows:\n" + JSON.stringify(evalCase),
+    "Assessment rules: score is 0 to 1; passed is true only when all material expected properties and deterministic checks pass; criticalRegression is true for a violation of a frozen constraint, exclusion, safety boundary, or output contract. Evidence must be concise, observable, and must not include chain-of-thought.",
+  ].join("\n\n");
+}
+
+async function executeCandidateRuns(
+  candidates: readonly { readonly id: string; readonly semanticPrompt: string; readonly promptHash: string }[],
+  heldOutCases: readonly EvalCase[],
+  targetId: string,
+  backendId: ExecutionBackend,
+  repetitions: number,
+  signal: AbortSignal,
+  injectedBackendFactory?: (id: ExecutionBackend) => LocalCompilerBackend,
+): Promise<CandidateEvaluationRun[]> {
+  const target = assertCandidateBackendMatchesTarget(backendId, targetId);
+  const backend = candidateExecutionBackend(backendId, injectedBackendFactory);
+  const runs: CandidateEvaluationRun[] = [];
+  for (const candidate of candidates) {
+    for (const evalCase of heldOutCases) {
+      for (let repetition = 0; repetition < repetitions; repetition += 1) {
+        assertNotAborted(signal);
+        const result = await backend.runStructured({
+          prompt: candidateExecutionPrompt(candidate, evalCase, target),
+          schema: CandidateRunAssessmentSchema,
+          model: target.model,
+          signal,
+        });
+        // The core evidence contract deliberately records only measurable
+        // verdicts and timing. The untrusted model's prose evidence is never
+        // elevated into a promotion criterion or package content.
+        runs.push({
+          candidateId: candidate.id,
+          targetId,
+          promptHash: candidate.promptHash,
+          caseId: evalCase.id,
+          repetition,
+          score: result.data.score,
+          passed: result.data.passed,
+          criticalRegression: result.data.criticalRegression,
+          latencyMs: result.durationMs,
+          provenance: {
+            backendId: result.backend,
+            runnerId: `${result.backend}-structured-candidate-runner-v1`,
+            modelId: target.model,
+            runId: randomUUID(),
+            evaluatedAt: new Date().toISOString(),
+            observableEvidence: [...result.data.evidence],
+          },
+        });
+      }
+    }
+  }
+  return runs;
+}
+
 async function executeNew(
   command: Extract<CliCommand, { name: "new" }>,
   signal: AbortSignal,
@@ -911,7 +995,7 @@ async function executeImprove(
   const next = PromptPackageSchema.parse({
     ...compiled,
     evals: [
-      ...source.evals.filter((evalCase) => evalCase.id !== proposedRegression.id),
+      ...generateDemandSpecificEvaluationSuite(prompt).cases,
       proposedRegression,
     ],
   });
@@ -928,18 +1012,11 @@ async function executeImprove(
 
 async function executeOptimize(
   command: Extract<CliCommand, { name: "optimize" }>,
+  signal: AbortSignal,
+  candidateBackendFactory?: (id: ExecutionBackend) => LocalCompilerBackend,
 ): Promise<CliServiceResult> {
   const sourcePath = await latestProjectPackage(command.packagePath);
   const source = await readPromptPackage(sourcePath);
-  const candidates = generatePromptCandidates(source.prompt, {
-    maxCandidates: command.maxCandidates,
-  });
-  const baseline = candidates[0];
-  if (baseline === undefined) {
-    throw new CliServiceError("Could not generate the canonical baseline candidate.");
-  }
-  const candidateIds = candidates.map((candidate) => candidate.id);
-  const candidateHashes = new Map(candidates.map((candidate) => [candidate.id, candidate.promptHash]));
   const availableTargets = [...new Set(source.artifacts.map((artifact) => artifact.targetId))];
   const targetId = command.target ?? (availableTargets.length === 1 ? availableTargets[0] : undefined);
   if (targetId === undefined) {
@@ -949,6 +1026,17 @@ async function executeOptimize(
       { availableTargets },
     );
   }
+  const target = getTargetProfile(targetId);
+  const candidates = generatePromptCandidates(source.prompt, {
+    maxCandidates: command.maxCandidates,
+    target,
+  });
+  const baseline = candidates[0];
+  if (baseline === undefined) {
+    throw new CliServiceError("Could not generate the canonical baseline candidate.");
+  }
+  const candidateIds = candidates.map((candidate) => candidate.id);
+  const candidateHashes = new Map(candidates.map((candidate) => [candidate.id, candidate.promptHash]));
   if (!availableTargets.includes(targetId)) {
     throw new CliServiceError(
       `Target ${JSON.stringify(targetId)} is not compiled in this package.`,
@@ -956,7 +1044,10 @@ async function executeOptimize(
       { availableTargets },
     );
   }
-  const heldOutCaseIds = source.evals.map((evalCase) => evalCase.id);
+  // Plans always derive their suite from the frozen demand, even when opening
+  // an older package that was created before demand-specific suites existed.
+  const heldOutCases = generateDemandSpecificEvaluationSuite(source.prompt).cases;
+  const heldOutCaseIds = heldOutCases.map((evalCase) => evalCase.id);
   const plan = {
     version: 1 as const,
     sourcePackage: {
@@ -967,16 +1058,16 @@ async function executeOptimize(
     targetId,
     baselineCandidateId: baseline.id,
     candidates,
-    heldOutCases: source.evals,
+    heldOutCases,
     evidenceContract: {
-      runs: "Supply one JSON array entry per generated candidate, held-out case, and repetition. Every candidate must cover the identical case/repetition keys.",
+      runs: "Supply one JSON array entry per generated candidate, held-out case, and repetition. Every candidate must cover the identical case/repetition keys. Or provide a named --backend with explicit --allow-execution to produce this matrix.",
       comparisons: "Optional subjective comparisons must use both candidate orders for each case; a winner must be one of the compared candidates or null.",
       promotion: "A challenger is recommended only when every required run passes, no critical regression is recorded, and its mean score strictly exceeds the configured threshold over baseline.",
       verification: "This command records a recommendation only. It never changes the source package or upgrades its verification status.",
     },
   };
 
-  if (command.runs === undefined) {
+  if (command.runs === undefined && command.backend === undefined) {
     const artifact = CandidateOptimizationPlanSchema.parse({
       ...plan,
       state: "awaiting_evidence",
@@ -986,14 +1077,41 @@ async function executeOptimize(
       : await writeJsonExclusive(command.output, artifact);
     return {
       status: "needs_input",
-      message: "Generated candidate evaluation plan. Run every candidate on the held-out cases, then provide --runs to make a promotion recommendation.",
+      message: "Generated candidate evaluation plan. Import runs with --runs, or explicitly execute every candidate with --backend <name> --allow-execution.",
       data: { ...artifact, written },
       exitCode: Codes.needsInput,
     };
   }
 
+  if (command.backend !== undefined && command.allowExecution !== true) {
+    throw new CliServiceError(
+      "Candidate execution requires explicit --allow-execution.",
+      Codes.usage,
+    );
+  }
+  if (command.backend !== undefined && command.comparisons !== undefined) {
+    throw new CliServiceError(
+      "Executed candidate runs do not accept imported --comparisons evidence.",
+      Codes.usage,
+    );
+  }
+  const repetitions = {
+    quick: 1,
+    default: 3,
+    deep: 5,
+  }[command.depth ?? "default"] as 1 | 3 | 5;
   const [runs, comparisons] = await Promise.all([
-    readCandidateEvaluationRuns(command.runs),
+    command.backend === undefined
+      ? readCandidateEvaluationRuns(command.runs!)
+      : executeCandidateRuns(
+          candidates,
+          heldOutCases,
+          targetId,
+          command.backend,
+          repetitions,
+          signal,
+          candidateBackendFactory,
+        ),
     command.comparisons === undefined
       ? Promise.resolve([] as BlindedComparison[])
       : readBlindedComparisons(command.comparisons),
@@ -1038,7 +1156,22 @@ async function executeOptimize(
     message: report.promoted
       ? `Candidate ${report.selectedCandidateId} cleared the promotion gate; source package remains unchanged.`
       : "No candidate cleared the promotion gate; source package remains unchanged.",
-    data: { ...artifact, written },
+    data: {
+      ...artifact,
+      written,
+      ...(command.backend === undefined
+        ? {}
+        : {
+            execution: {
+              backend: command.backend,
+              targetId,
+              repetitions,
+              consented: true,
+              method: "target_self_assessment",
+              note: "Each candidate/case/repetition was executed sequentially through the named backend. Promotion remains hash- and held-out-suite-bound.",
+            },
+          }),
+    },
     exitCode: Codes.success,
   };
 }
@@ -1065,7 +1198,7 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
         case "improve":
           return executeImprove(command, signal);
         case "optimize":
-          return executeOptimize(command);
+          return executeOptimize(command, signal, options.candidateBackendFactory);
         case "compile": {
           const sourcePath = await latestProjectPackage(command.packagePath);
           const source = await readPromptPackage(sourcePath);
@@ -1121,15 +1254,35 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
         }
         case "eval": {
           if (command.mode === "live") {
-            throw new CliServiceError(
-              "Live target evaluation is unavailable: no native target executor has passed the isolation conformance gate. Use proxy mode; no target-model evidence was recorded.",
-              Codes.unavailable,
-              {
-                requestedMode: command.mode,
-                verificationRecorded: false,
-                availableModes: ["static", "proxy"],
-              },
+            if (!command.allowExecution || command.backend !== "openai") {
+              throw new CliServiceError(
+                "Live target evaluation requires --backend openai and explicit --allow-execution.",
+                Codes.usage,
+              );
+            }
+            const sourcePath = await latestProjectPackage(command.packagePath);
+            const source = await readPromptPackage(sourcePath);
+            const repetitions = {
+              quick: 1,
+              default: 3,
+              deep: 5,
+            }[command.depth] as 1 | 3 | 5;
+            const report = await runExternalEvaluation(
+              source,
+              { mode: "live", allowExecution: true, repetitions, signal },
+              createOpenAIBackend({ allowExecution: true }).evaluationBackend,
             );
+            const destination = packageWriteDestination(sourcePath);
+            const written =
+              destination === undefined
+                ? undefined
+                : await writePromptPackage(report.promptPackage, destination);
+            return {
+              status: "ok",
+              message: `Live target evaluation ${report.passed ? "passed" : "failed"} using OpenAI Responses with a separate judge.`,
+              data: { ...report, written },
+              exitCode: report.passed ? Codes.success : Codes.error,
+            };
           }
           const sourcePath = await latestProjectPackage(command.packagePath);
           const source = await readPromptPackage(sourcePath);
@@ -1157,6 +1310,12 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           if (!command.allowExecution || command.backend === undefined) {
             throw new CliServiceError(
               "External evaluation requires an explicit backend and execution consent.",
+              Codes.usage,
+            );
+          }
+          if (command.backend === "openai") {
+            throw new CliServiceError(
+              "OpenAI is available only for --mode live; proxy evaluation requires codex or claude.",
               Codes.usage,
             );
           }

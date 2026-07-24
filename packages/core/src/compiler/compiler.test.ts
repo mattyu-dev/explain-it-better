@@ -91,6 +91,23 @@ describe("provider-neutral candidates", () => {
     expect(candidates).toHaveLength(1);
   });
 
+  it("uses materially distinct strategies while preserving the frozen demand", () => {
+    const prompt = promptFor("Recommend a migration plan with evidence and an implementation decision.");
+    const candidates = generatePromptCandidates(prompt, { target: profile({ surface: "chat_app" }) });
+
+    expect(candidates.map((candidate) => candidate.semanticPrompt)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Strategy: direct delivery"),
+        expect.stringContaining("Strategy: evidence-led delivery"),
+        expect.stringContaining("Strategy: decision-ready synthesis"),
+      ]),
+    );
+    expect(candidates.every((candidate) => candidate.semanticPrompt.includes(prompt.demand.objective))).toBe(true);
+    expect(candidates.every((candidate) => candidate.semanticPrompt.includes("openai test-model on its chat_app surface"))).toBe(true);
+    expect(candidates[1]?.semanticPrompt).toContain("criterion");
+    expect(candidates[2]?.semanticPrompt).toContain("trade-offs");
+  });
+
   it("serializes a declared JSON Schema into every candidate", () => {
     const prompt = buildPromptSpec(
       createFastDraft(
@@ -261,6 +278,20 @@ describe("compatibility lint and rendering", () => {
       ),
     );
     expect(lintCompatibility(prompt, profile()).map((item) => item.code)).toContain(
+      "CONTRADICTORY_INSTRUCTIONS",
+    );
+  });
+
+  it("does not mistake an exclusion embedded in the original brief for a positive requirement", () => {
+    const prompt = buildPromptSpec(
+      createFastDraft(
+        analyzeBrief(
+          "Return a prioritized implementation plan; do not propose agent-runtime, MCP, installer, or deployment features.",
+        ),
+      ),
+    );
+
+    expect(lintCompatibility(prompt, profile()).map((item) => item.code)).not.toContain(
       "CONTRADICTORY_INSTRUCTIONS",
     );
   });

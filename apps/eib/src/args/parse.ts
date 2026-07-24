@@ -253,18 +253,43 @@ export function parseArgs(argv: readonly string[]): CliCommand {
     case "optimize": {
       rejectOptions(
         parsed,
-        ["runs", "comparisons", "max-candidates", "minimum-improvement", "output", "target"],
-        [],
+        ["runs", "comparisons", "max-candidates", "minimum-improvement", "output", "target", "backend", "depth"],
+        ["allow-execution"],
       );
       const runs = one(parsed, "runs");
       const comparisons = one(parsed, "comparisons");
       const output = one(parsed, "output");
       const target = one(parsed, "target");
+      const backend = one(parsed, "backend");
+      const depthValue = one(parsed, "depth");
       if (comparisons !== undefined && runs === undefined) {
         throw new UsageError("--comparisons requires --runs");
       }
       if (one(parsed, "minimum-improvement") !== undefined && runs === undefined) {
-        throw new UsageError("--minimum-improvement requires --runs");
+        if (backend === undefined) {
+          throw new UsageError("--minimum-improvement requires --runs or --backend");
+        }
+      }
+      if (backend !== undefined && backend !== "codex" && backend !== "claude" && backend !== "openai") {
+        throw new UsageError("--backend must be codex, claude, or openai");
+      }
+      if (backend !== undefined && runs !== undefined) {
+        throw new UsageError("--backend cannot be combined with imported --runs evidence");
+      }
+      if (backend !== undefined && comparisons !== undefined) {
+        throw new UsageError("--backend cannot be combined with imported --comparisons evidence");
+      }
+      if (backend !== undefined && !parsed.flags.has("allow-execution")) {
+        throw new UsageError("candidate execution requires explicit --allow-execution");
+      }
+      if (backend === undefined && parsed.flags.has("allow-execution")) {
+        throw new UsageError("--allow-execution requires --backend codex|claude|openai");
+      }
+      if (backend === undefined && depthValue !== undefined) {
+        throw new UsageError("--depth requires --backend codex|claude|openai");
+      }
+      if (depthValue !== undefined && !["quick", "default", "deep"].includes(depthValue)) {
+        throw new UsageError("--depth must be quick, default, or deep");
       }
       const minimumImprovement = parseNonNegativeNumber(
         one(parsed, "minimum-improvement"),
@@ -276,6 +301,9 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         packagePath: packagePath(parsed.positionals, "optimize"),
         maxCandidates: parseCandidateCount(one(parsed, "max-candidates")),
         ...(target === undefined ? {} : { target }),
+        ...(backend === undefined ? {} : { backend }),
+        ...(depthValue === undefined ? {} : { depth: depthValue as "quick" | "default" | "deep" }),
+        ...(backend === undefined ? {} : { allowExecution: true }),
         ...(runs === undefined ? {} : { runs }),
         ...(comparisons === undefined ? {} : { comparisons }),
         ...(minimumImprovement === undefined ? {} : { minimumImprovement }),
@@ -309,15 +337,15 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       }
       const backend = one(parsed, "backend");
       const fixtures = one(parsed, "fixtures");
-      if (backend !== undefined && backend !== "codex" && backend !== "claude") {
-        throw new UsageError("--backend must be codex or claude");
+      if (backend !== undefined && backend !== "codex" && backend !== "claude" && backend !== "openai") {
+        throw new UsageError("--backend must be codex, claude, or openai");
       }
       if (modeValue === "proxy" && !parsed.flags.has("allow-execution")) {
         throw new UsageError(
           "proxy evaluation requires explicit --allow-execution",
         );
       }
-      if (modeValue === "proxy" && backend === undefined) {
+      if (modeValue === "proxy" && (backend === undefined || backend === "openai")) {
         throw new UsageError("proxy evaluation requires --backend codex|claude");
       }
       if (modeValue !== "static" && fixtures !== undefined) {
@@ -332,15 +360,11 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       if (modeValue === "static" && parsed.options.has("depth")) {
         throw new UsageError("--depth is only valid for proxy or live evaluation");
       }
-      if (modeValue === "live" && backend !== undefined) {
-        throw new UsageError(
-          "--backend selects a proxy evaluator and is not valid for unavailable live mode",
-        );
+      if (modeValue === "live" && backend !== "openai") {
+        throw new UsageError("live evaluation requires --backend openai");
       }
-      if (modeValue === "live" && parsed.flags.has("allow-execution")) {
-        throw new UsageError(
-          "--allow-execution is not accepted while live evaluation is unavailable",
-        );
+      if (modeValue === "live" && !parsed.flags.has("allow-execution")) {
+        throw new UsageError("live evaluation requires explicit --allow-execution");
       }
       return {
         name: "eval",

@@ -1,6 +1,15 @@
 export { createClaudeBackend } from "./claude.js";
 export { createCodexBackend } from "./codex.js";
 export {
+  createOpenAIBackend,
+  createOpenAIResponsesEvaluationBackend,
+  OpenAIResponsesEvaluationError,
+  redactOpenAISecrets,
+  type OpenAIBackendOptions,
+  type OpenAIFetch,
+  type OpenAIResponsesEvaluationErrorCode,
+} from "./openai.js";
+export {
   createHermesBackend,
   createKimiBackend,
   getTargetOnlyBackend,

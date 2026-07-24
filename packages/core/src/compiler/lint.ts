@@ -70,7 +70,11 @@ function contradictoryInstruction(context: CompatibilityContext): string | undef
     ...context.prompt.demand.exclusions,
   ].map(normalizedInstruction);
   const positive = new Set(
-    values.filter((value) => !/^(?:do not|dont|never|must not)\s+/u.test(value)),
+    // The original brief is preserved as the objective, so it can contain a
+    // positive request followed by an exclusion. Treat such mixed prose as
+    // context rather than a standalone positive instruction; only an
+    // independently positive field may contradict an explicit exclusion.
+    values.filter((value) => !/\b(?:do not|dont|never|must not)\b/u.test(value)),
   );
   for (const value of values) {
     const match = /^(?:do not|dont|never|must not)\s+(.+)$/u.exec(value);

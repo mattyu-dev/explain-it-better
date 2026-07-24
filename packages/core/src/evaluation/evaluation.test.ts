@@ -23,6 +23,7 @@ import {
   CandidateOptimizationEvidenceSchema,
   selectBestTestedCandidate,
 } from "./optimization.js";
+import type { CandidateEvaluationRun } from "./optimization.js";
 
 type EvalResult = z.infer<typeof EvalResultSchema>;
 
@@ -101,6 +102,14 @@ function optimizationEvidenceFixture() {
       passed: true,
       criticalRegression: false,
       latencyMs: 10,
+      provenance: {
+        backendId: "codex",
+        runnerId: "codex-cli-structured-v1",
+        modelId: "gpt-5.6-codex",
+        runId: "4d1d055f-0d7a-405d-8f7e-a4db2b3bc563",
+        evaluatedAt: "2026-07-24T12:00:00.000Z",
+        observableEvidence: [`${candidate.id} satisfied ${evalCase.id}.`],
+      },
     })),
   );
   const report = selectBestTestedCandidate(runs, {
@@ -585,6 +594,14 @@ describe("best-tested candidate promotion", () => {
     passed: score >= 0.8,
     criticalRegression,
     latencyMs: 10,
+    provenance: {
+      backendId: "codex",
+      runnerId: "codex-cli-structured-v1",
+      modelId: "gpt-5.6-codex",
+      runId: "4d1d055f-0d7a-405d-8f7e-a4db2b3bc563",
+      evaluatedAt: "2026-07-24T12:00:00.000Z",
+      observableEvidence: [`${candidateId} satisfied ${caseId}.`],
+    },
   });
 
   it("requires identical held-out cases and promotes a measurable clean improvement", () => {
@@ -651,7 +668,7 @@ describe("best-tested candidate promotion", () => {
     ).toThrow(/invalid score/iu);
   });
 
-  it("refuses cross-target, mutable-prompt, and duplicate-comparison evidence", () => {
+  it("refuses cross-target, mutable-prompt, mixed-provenance, and duplicate-comparison evidence", () => {
     expect(() =>
       selectBestTestedCandidate(
         [
@@ -673,6 +690,30 @@ describe("best-tested candidate promotion", () => {
         { baselineCandidateId: "baseline" },
       ),
     ).toThrow(/more than one prompt hash/iu);
+
+    expect(() =>
+      selectBestTestedCandidate(
+        [
+          run("baseline", "one", 0.8),
+          {
+            ...run("challenger", "one", 0.9),
+            provenance: {
+              ...run("challenger", "one", 0.9).provenance,
+              backendId: "claude",
+            },
+          },
+        ],
+        { baselineCandidateId: "baseline" },
+      ),
+    ).toThrow(/identical backend, runner, and model provenance/iu);
+
+    const withoutProvenance = { ...run("baseline", "one", 0.8), provenance: undefined };
+    expect(() =>
+      selectBestTestedCandidate(
+        [withoutProvenance, run("challenger", "one", 0.9)] as readonly CandidateEvaluationRun[],
+        { baselineCandidateId: "baseline" },
+      ),
+    ).toThrow(/auditable backend, runner, model, run, timestamp, and observable evidence provenance/iu);
 
     const runs = [run("baseline", "one", 0.8), run("challenger", "one", 0.9)];
     expect(() =>
@@ -700,6 +741,17 @@ describe("best-tested candidate promotion", () => {
     const evidence = optimizationEvidenceFixture();
     expect(CandidateOptimizationEvidenceSchema.safeParse(evidence).success).toBe(true);
 
+    // Older score-only imports intentionally cannot become promotion evidence:
+    // an imported run must still identify the observed executor and rationale.
+    expect(
+      CandidateOptimizationEvidenceSchema.safeParse({
+        ...evidence,
+        runs: evidence.runs.map((run) =>
+          Object.fromEntries(Object.entries(run).filter(([key]) => key !== "provenance")),
+        ),
+      }).success,
+    ).toBe(false);
+
     expect(
       CandidateOptimizationEvidenceSchema.safeParse({
         ...evidence,
@@ -710,6 +762,36 @@ describe("best-tested candidate promotion", () => {
       CandidateOptimizationEvidenceSchema.safeParse({
         ...evidence,
         runs: [{ ...evidence.runs[0]!, promptHash: "c".repeat(64) }, ...evidence.runs.slice(1)],
+      }).success,
+    ).toBe(false);
+    expect(
+      CandidateOptimizationEvidenceSchema.safeParse({
+        ...evidence,
+        runs: [
+          {
+            ...evidence.runs[0]!,
+            provenance: {
+              ...evidence.runs[0]!.provenance,
+              observableEvidence: [],
+            },
+          },
+          ...evidence.runs.slice(1),
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      CandidateOptimizationEvidenceSchema.safeParse({
+        ...evidence,
+        runs: [
+          {
+            ...evidence.runs[0]!,
+            provenance: {
+              ...evidence.runs[0]!.provenance,
+              runId: "not-a-uuid",
+            },
+          },
+          ...evidence.runs.slice(1),
+        ],
       }).success,
     ).toBe(false);
   });

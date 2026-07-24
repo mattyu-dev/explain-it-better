@@ -39,7 +39,7 @@ export const sourceManifest: readonly SourceManifestEntry[] = [
     url: "https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices.md",
     documentKind: "prompting_guide",
     contentHash:
-      "f5813523ecf28fa173dedf2328c2d690d2e57654ec5001d8266168d2d6ef183f",
+      "85a49380cc87ce227b9792573a2b7c828a30f803a2e22f9450c6f46daf2e50dd",
     summary:
       "Claude prompting guidance covering clarity, examples, XML structure, thinking, long context, tools, and agentic systems.",
     expectedSignals: ["Prompting best practices", "XML", "Claude"],

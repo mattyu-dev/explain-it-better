@@ -152,8 +152,8 @@ function assertExpectedPromptProperty(
       expect(prompt.evaluation.criteria.length).toBeGreaterThan(0);
       return;
     case "evidence checklist":
-      expect(verification?.semanticPrompt).toContain("## Verification protocol");
-      expect(verification?.semanticPrompt).toContain("pass/fail evidence");
+      expect(verification?.semanticPrompt).toContain("## Strategy: evidence-led delivery");
+      expect(verification?.semanticPrompt).toContain("final check");
       return;
     case "source provenance":
       expect(prompt.demand.context.length).toBeGreaterThan(0);
@@ -182,7 +182,7 @@ function assertExpectedPromptProperty(
       return;
     case "evidence":
       expect(prompt.evaluation.evidencePolicy.length).toBeGreaterThan(0);
-      expect(verification?.semanticPrompt).toContain("unverified");
+      expect(verification?.semanticPrompt).toContain("cannot be verified");
       return;
     case "prioritization":
       expect(text).toMatch(/(?:ordered|prioriti[sz]|sequence)/iu);
@@ -201,7 +201,7 @@ function assertExpectedPromptProperty(
       return;
     case "reasoning structure":
       expect(compiledProfiles.every((profile) => profile.reasoning.preserveState)).toBe(true);
-      expect(reasoning?.semanticPrompt).toContain("## Recommended approach");
+      expect(reasoning?.semanticPrompt).toContain("## Strategy: decision-ready synthesis");
       return;
     case "candidate variants":
       expect(candidates).toHaveLength(3);

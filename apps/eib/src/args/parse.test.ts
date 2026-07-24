@@ -71,20 +71,21 @@ describe("parseArgs", () => {
     );
   });
 
-  it("parses unavailable live mode without pretending a proxy backend can execute it", () => {
-    expect(parseArgs(["eval", "--mode=live"])).toMatchObject({
+  it("requires the isolated OpenAI backend and explicit consent for live target evaluation", () => {
+    expect(parseArgs(["eval", "--mode=live", "--backend=openai", "--allow-execution"])).toMatchObject({
       name: "eval",
       packagePath: ".eib/package.json",
       mode: "live",
       depth: "default",
-      allowExecution: false,
+      backend: "openai",
+      allowExecution: true,
     });
     expect(() =>
       parseArgs(["eval", "--mode=live", "--backend", "claude"]),
-    ).toThrow("--backend selects a proxy evaluator");
+    ).toThrow("live evaluation requires --backend openai");
     expect(() =>
-      parseArgs(["eval", "--mode=live", "--allow-execution"]),
-    ).toThrow("--allow-execution is not accepted");
+      parseArgs(["eval", "--mode=live", "--backend", "openai"]),
+    ).toThrow("live evaluation requires explicit --allow-execution");
   });
 
   it("maps evaluation depth without weakening consent requirements", () => {
@@ -202,6 +203,36 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["optimize", "--runs", "runs.json", "--minimum-improvement", "-1"])).toThrow(
       "--minimum-improvement must be a finite non-negative number",
     );
+  });
+
+  it("requires named-backend consent before it can execute all candidates", () => {
+    expect(() =>
+      parseArgs(["optimize", "package", "--backend", "openai"]),
+    ).toThrow("candidate execution requires explicit --allow-execution");
+    expect(parseArgs([
+      "optimize",
+      "package",
+      "--target",
+      "openai-gpt-5.6-api",
+      "--backend",
+      "openai",
+      "--allow-execution",
+      "--depth",
+      "deep",
+    ])).toMatchObject({
+      name: "optimize",
+      packagePath: "package",
+      target: "openai-gpt-5.6-api",
+      backend: "openai",
+      allowExecution: true,
+      depth: "deep",
+    });
+    expect(() =>
+      parseArgs(["optimize", "package", "--allow-execution"]),
+    ).toThrow("--allow-execution requires --backend");
+    expect(() =>
+      parseArgs(["optimize", "package", "--backend", "openai", "--allow-execution", "--runs", "runs.json"]),
+    ).toThrow("--backend cannot be combined with imported --runs evidence");
   });
 
   it("rejects JSON mode for the interactive TUI", () => {

@@ -11,14 +11,25 @@ use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Private-repository release documentation and a single `npm run release:check`
   gate for local and CI verification.
 - Public documentation now defines EIB as a target-aware prompt optimizer:
-  demand, clarification, prompt variants, shared evaluation, best-tested
-  promotion, and paste-ready export.
+  structured demand, target-aware prompt variants, demand-specific held-out
+  evaluation, best-tested promotion, and paste-ready export.
+- The optimizer documentation now specifies the full evidence loop: structured
+  demand interpretation, target-aware candidate strategies, demand-specific
+  held-out evaluation, imported or explicitly executed candidate evidence, and
+  promotion bound to the exact demand, target, candidate hash, and case suite.
+- Documented native OpenAI evaluation: complete static evidence first, then
+  explicit `eval --mode live --backend openai --allow-execution` target and
+  separate structured-judge runs with bounded evidence scope.
 
 ### Changed
 
 - Removed agent deployment, MCP runtime, installation, and approval workflow
   framing from the user-facing product story. Evidence bundles are documented
   as reproducible prompt artifacts, not applications to run.
+- Tightened public claims: static and proxy evidence are not target-model
+  validation; native OpenAI runs require consent, an authorized credential, and
+  have an explicit cost multiplier; and “best tested” is never presented as a
+  universal or permanent quality claim.
 
 ## [0.1.0] - 2026-07-24
 
