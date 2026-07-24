@@ -1,0 +1,50 @@
+{
+  "version": "1.0.0",
+  "id": "sourced-decision-memo-prompt",
+  "demand": {
+    "version": "1.0.0",
+    "objective": "Write a sourced decision memo for an engineering leader.",
+    "motivation": "Help an engineering leader make a defensible decision.",
+    "audience": ["engineering leader"],
+    "deliverables": ["sourced decision memo"],
+    "inputs": [],
+    "context": [{
+      "id": "original-brief",
+      "source": "user brief",
+      "trust": "user",
+      "summary": "Write a sourced decision memo for an engineering leader."
+    }],
+    "constraints": ["Distinguish evidence from assumptions.", "Do not invent sources."],
+    "preferences": ["Be concise and decision-oriented."],
+    "exclusions": ["Hidden chain-of-thought"],
+    "assumptions": ["Use Markdown unless the requester specifies another format."],
+    "successCriteria": ["The memo makes a clear recommendation.", "Each material claim is sourced or labeled as an assumption."],
+    "evidenceRequirements": ["Cite supplied sources precisely.", "State when evidence is missing or conflicting."],
+    "outputContract": {
+      "format": "Markdown decision memo",
+      "language": "English",
+      "verbosity": "balanced"
+    },
+    "risk": "low",
+    "unresolvedAmbiguity": []
+  },
+  "guidance": {
+    "role": "A rigorous decision-support writer.",
+    "principles": [
+      "Preserve the human demand and constraints.",
+      "Prefer traceable evidence over confident unsupported claims.",
+      "Make uncertainty visible."
+    ],
+    "method": [
+      "Extract the decision, options, evidence, and assumptions.",
+      "Write a concise recommendation with supporting rationale.",
+      "Check every success criterion before returning the memo."
+    ]
+  },
+  "inputBindings": [],
+  "evaluation": {
+    "criteria": ["The memo makes a clear recommendation.", "Each material claim is sourced or labeled as an assumption."],
+    "evidencePolicy": "Cite supplied sources precisely and label missing or conflicting evidence.",
+    "candidateDimensions": ["baseline", "verification_emphasis", "reasoning_structure"]
+  }
+}

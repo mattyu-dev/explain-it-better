@@ -9,6 +9,7 @@ import {
   STRUCTURE_ONLY_WARNING,
 } from "./static.js";
 import {
+  PROMPT_QUALITY_EVALUATION_CONTRACT,
   runExternalEvaluation,
   type ExternalEvaluationInvocation,
 } from "./external.js";
@@ -18,7 +19,10 @@ import {
   isVerificationAtLeast,
   VERIFICATION_LADDER,
 } from "./verification.js";
-import { selectBestTestedCandidate } from "./optimization.js";
+import {
+  CandidateOptimizationEvidenceSchema,
+  selectBestTestedCandidate,
+} from "./optimization.js";
 
 type EvalResult = z.infer<typeof EvalResultSchema>;
 
@@ -64,6 +68,64 @@ function completeStaticOutputs(promptPackage: ReturnType<typeof makePromptPackag
       evalCase.category === "output_schema" ? "{}" : "answer",
     ]),
   );
+}
+
+function optimizationEvidenceFixture() {
+  const source = makePromptPackage();
+  const candidates = [
+    {
+      id: "baseline",
+      dimension: "baseline" as const,
+      promptSpecId: "frozen-demand",
+      semanticPrompt: "Answer the demand exactly.",
+      promptHash: "a".repeat(64),
+      changeLog: ["Canonical baseline."],
+    },
+    {
+      id: "challenger",
+      dimension: "reasoning_structure" as const,
+      promptSpecId: "frozen-demand",
+      semanticPrompt: "Answer the demand with an explicit quality check.",
+      promptHash: "b".repeat(64),
+      changeLog: ["Adds an output-quality check."],
+    },
+  ];
+  const runs = candidates.flatMap((candidate, candidateIndex) =>
+    source.evals.map((evalCase) => ({
+      candidateId: candidate.id,
+      targetId: "openai-gpt",
+      promptHash: candidate.promptHash,
+      caseId: evalCase.id,
+      repetition: 0,
+      score: candidateIndex === 0 ? 0.8 : 0.9,
+      passed: true,
+      criticalRegression: false,
+      latencyMs: 10,
+    })),
+  );
+  const report = selectBestTestedCandidate(runs, {
+    baselineCandidateId: "baseline",
+    minimumImprovement: 0.05,
+  });
+  return {
+    version: 1 as const,
+    sourcePackage: { id: source.id, verification: source.verification },
+    promptSpecId: "frozen-demand",
+    targetId: "openai-gpt",
+    baselineCandidateId: "baseline",
+    candidates,
+    heldOutCases: source.evals,
+    evidenceContract: {
+      runs: "Every candidate, case, and repetition is required.",
+      comparisons: "Use blinded reversed order when subjective comparisons are supplied.",
+      promotion: "Require measurable improvement with no critical regression.",
+      verification: "Promotion evidence never upgrades source verification.",
+    },
+    state: "evaluated" as const,
+    minimumImprovement: 0.05,
+    runs,
+    report,
+  };
 }
 
 describe("deterministic static evaluation", () => {
@@ -156,12 +218,12 @@ describe("deterministic static evaluation", () => {
     const promptPackage = makePromptPackage();
     const missingSchema = {
       ...promptPackage,
-      blueprint: {
-        ...promptPackage.blueprint,
-        intent: {
-          ...promptPackage.blueprint.intent,
+      prompt: {
+        ...promptPackage.prompt,
+        demand: {
+          ...promptPackage.prompt.demand,
           outputContract: {
-            ...promptPackage.blueprint.intent.outputContract,
+            ...promptPackage.prompt.demand.outputContract,
             schema: undefined,
           },
         },
@@ -172,12 +234,12 @@ describe("deterministic static evaluation", () => {
 
     const jsonWithoutCheck = {
       ...missingSchema,
-      blueprint: {
-        ...missingSchema.blueprint,
-        intent: {
-          ...missingSchema.blueprint.intent,
+      prompt: {
+        ...missingSchema.prompt,
+        demand: {
+          ...missingSchema.prompt.demand,
           outputContract: {
-            ...missingSchema.blueprint.intent.outputContract,
+            ...missingSchema.prompt.demand.outputContract,
             format: "JSON",
           },
         },
@@ -290,6 +352,34 @@ describe("external evaluation boundary", () => {
     expect(report.passed).toBe(true);
     expect(report.promptPackage.verification).toBe("proxy_evaluated");
     expect(evaluate).toHaveBeenCalledOnce();
+    const invocation = evaluate.mock.calls[0]?.[0];
+    expect(invocation?.focus).toBe("prompt_quality");
+    expect(invocation?.evaluationContract).toEqual(PROMPT_QUALITY_EVALUATION_CONTRACT);
+  });
+
+  it("rejects blank evidence because a score alone is not prompt-quality proof", async () => {
+    const promptPackage = staticallyValidatedPackage();
+    await expect(
+      runExternalEvaluation(
+        promptPackage,
+        { mode: "proxy", allowExecution: true, repetitions: 1 },
+        {
+          id: "no-quality-evidence",
+          evaluate: (invocation) =>
+            Promise.resolve(
+              invocation.evalCases.map((evalCase) => ({
+                caseId: evalCase.id,
+                passed: true,
+                score: 1,
+                evidence: ["  "],
+                mode: invocation.mode,
+                targetId: "openai-gpt",
+                durationMs: 1,
+              })),
+            ),
+        },
+      ),
+    ).rejects.toThrow(/no observable prompt-quality evidence/iu);
   });
 
   it("rejects a verification label without complete passing static evidence", async () => {
@@ -487,6 +577,8 @@ describe("best-tested candidate promotion", () => {
     criticalRegression = false,
   ) => ({
     candidateId,
+    targetId: "openai-gpt",
+    promptHash: candidateId === "baseline" ? "a".repeat(64) : "b".repeat(64),
     caseId,
     repetition: 0,
     score,
@@ -557,5 +649,68 @@ describe("best-tested candidate promotion", () => {
         { baselineCandidateId: "baseline" },
       ),
     ).toThrow(/invalid score/iu);
+  });
+
+  it("refuses cross-target, mutable-prompt, and duplicate-comparison evidence", () => {
+    expect(() =>
+      selectBestTestedCandidate(
+        [
+          run("baseline", "one", 0.8),
+          { ...run("challenger", "one", 0.9), targetId: "anthropic-claude" },
+        ],
+        { baselineCandidateId: "baseline" },
+      ),
+    ).toThrow(/one identical target/iu);
+
+    expect(() =>
+      selectBestTestedCandidate(
+        [
+          run("baseline", "one", 0.8),
+          { ...run("baseline", "two", 0.8), promptHash: "c".repeat(64) },
+          run("challenger", "one", 0.9),
+          run("challenger", "two", 0.9),
+        ],
+        { baselineCandidateId: "baseline" },
+      ),
+    ).toThrow(/more than one prompt hash/iu);
+
+    const runs = [run("baseline", "one", 0.8), run("challenger", "one", 0.9)];
+    expect(() =>
+      selectBestTestedCandidate(runs, {
+        baselineCandidateId: "baseline",
+        comparisons: [
+          {
+            caseId: "one",
+            leftCandidateId: "baseline",
+            rightCandidateId: "challenger",
+            winnerCandidateId: "challenger",
+          },
+          {
+            caseId: "one",
+            leftCandidateId: "baseline",
+            rightCandidateId: "challenger",
+            winnerCandidateId: "challenger",
+          },
+        ],
+      }),
+    ).toThrow(/duplicate case\/candidate order/iu);
+  });
+
+  it("makes the serialized recommendation self-auditing", () => {
+    const evidence = optimizationEvidenceFixture();
+    expect(CandidateOptimizationEvidenceSchema.safeParse(evidence).success).toBe(true);
+
+    expect(
+      CandidateOptimizationEvidenceSchema.safeParse({
+        ...evidence,
+        report: { ...evidence.report, promoted: false },
+      }).success,
+    ).toBe(false);
+    expect(
+      CandidateOptimizationEvidenceSchema.safeParse({
+        ...evidence,
+        runs: [{ ...evidence.runs[0]!, promptHash: "c".repeat(64) }, ...evidence.runs.slice(1)],
+      }).success,
+    ).toBe(false);
   });
 });

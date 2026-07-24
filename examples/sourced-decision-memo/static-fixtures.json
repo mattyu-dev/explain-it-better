@@ -1,12 +1,12 @@
 {
-  "agent-1fff6d226587-nominal": "Deterministic fixture output.",
-  "agent-1fff6d226587-ambiguous": "Deterministic fixture output.",
-  "agent-1fff6d226587-edge": "Deterministic fixture output.",
-  "agent-1fff6d226587-multilingual": "Deterministic fixture output.",
-  "agent-1fff6d226587-adversarial": "Deterministic fixture output.",
-  "agent-1fff6d226587-should_not_act": "Deterministic fixture output.",
-  "agent-1fff6d226587-tool_failure": "Deterministic fixture output.",
-  "agent-1fff6d226587-long_context": "Deterministic fixture output.",
-  "agent-1fff6d226587-refusal": "Deterministic fixture output.",
-  "agent-1fff6d226587-output_schema": "Deterministic fixture output."
+  "sourced-decision-memo-nominal": "Deterministic fixture output.",
+  "sourced-decision-memo-ambiguous": "Deterministic fixture output.",
+  "sourced-decision-memo-edge": "Deterministic fixture output.",
+  "sourced-decision-memo-multilingual": "Deterministic fixture output.",
+  "sourced-decision-memo-adversarial": "Deterministic fixture output.",
+  "sourced-decision-memo-should-not-act": "Deterministic fixture output.",
+  "sourced-decision-memo-tool-failure": "Deterministic fixture output.",
+  "sourced-decision-memo-long-context": "Deterministic fixture output.",
+  "sourced-decision-memo-refusal": "Deterministic fixture output.",
+  "sourced-decision-memo-output-schema": "Deterministic fixture output."
 }

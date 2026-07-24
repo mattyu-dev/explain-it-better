@@ -3,14 +3,18 @@ import { EvalCaseSchema, VerificationStatusSchema } from "../contracts.js";
 
 export const PromptCandidateSchema = z.object({
   id: z.string().min(1),
-  dimension: z.enum(["baseline", "verification_emphasis", "workflow_emphasis"]),
-  blueprintId: z.string().min(1),
+  dimension: z.enum(["baseline", "verification_emphasis", "reasoning_structure"]),
+  promptSpecId: z.string().min(1),
   semanticPrompt: z.string().min(1),
+  promptHash: z.string().regex(/^[a-f0-9]{64}$/),
   changeLog: z.array(z.string().min(1)).min(1),
 });
 
 export const CandidateEvaluationRunSchema = z.object({
   candidateId: z.string().min(1),
+  /** Exact rendered target and prompt digest make promotion evidence auditable. */
+  targetId: z.string().min(1),
+  promptHash: z.string().regex(/^[a-f0-9]{64}$/),
   caseId: z.string().min(1),
   repetition: z.number().int().nonnegative(),
   score: z.number().min(0).max(1),
@@ -24,6 +28,8 @@ export const CandidateEvaluationRunSchema = z.object({
 
 export interface CandidateEvaluationRun {
   readonly candidateId: string;
+  readonly targetId: string;
+  readonly promptHash: string;
   readonly caseId: string;
   readonly repetition: number;
   readonly score: number;
@@ -33,6 +39,25 @@ export interface CandidateEvaluationRun {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly cost?: number;
+}
+
+function toCandidateEvaluationRuns(
+  runs: readonly z.infer<typeof CandidateEvaluationRunSchema>[],
+): CandidateEvaluationRun[] {
+  return runs.map((run) => ({
+    candidateId: run.candidateId,
+    targetId: run.targetId,
+    promptHash: run.promptHash,
+    caseId: run.caseId,
+    repetition: run.repetition,
+    score: run.score,
+    passed: run.passed,
+    criticalRegression: run.criticalRegression,
+    latencyMs: run.latencyMs,
+    ...(run.inputTokens === undefined ? {} : { inputTokens: run.inputTokens }),
+    ...(run.outputTokens === undefined ? {} : { outputTokens: run.outputTokens }),
+    ...(run.cost === undefined ? {} : { cost: run.cost }),
+  }));
 }
 
 export const BlindedComparisonSchema = z.object({
@@ -108,16 +133,66 @@ const CandidateOptimizationBaseSchema = z.object({
     id: z.string().min(1),
     verification: VerificationStatusSchema,
   }),
+  /** All candidates in an optimization run must answer the same frozen demand. */
+  promptSpecId: z.string().min(1),
+  /** A comparison is only meaningful for one named target profile/model. */
+  targetId: z.string().min(1),
   baselineCandidateId: z.string().min(1),
   candidates: z.array(PromptCandidateSchema).min(1).max(3),
   heldOutCases: z.array(EvalCaseSchema).min(1),
   evidenceContract: CandidateEvidenceContractSchema,
 });
 
+type CandidateOptimizationBase = z.infer<typeof CandidateOptimizationBaseSchema>;
+
+function addIssue(context: z.RefinementCtx, path: readonly (string | number)[], message: string): void {
+  context.addIssue({ code: "custom", path: [...path], message });
+}
+
+/**
+ * A plan is a claim about a particular prompt-candidate set and a particular
+ * held-out suite. Keep both identities closed: otherwise an evidence file can
+ * quietly omit a weak candidate or substitute an easier case.
+ */
+function assertOptimizationPlanScope(
+  artifact: CandidateOptimizationBase,
+  context: z.RefinementCtx,
+): void {
+  const candidateIds = artifact.candidates.map((candidate) => candidate.id);
+  if (new Set(candidateIds).size !== candidateIds.length) {
+    addIssue(context, ["candidates"], "Candidate IDs must be unique.");
+  }
+  if (!candidateIds.includes(artifact.baselineCandidateId)) {
+    addIssue(
+      context,
+      ["baselineCandidateId"],
+      "The baseline candidate must be one of the declared candidates.",
+    );
+  }
+  if (artifact.candidates.some((candidate) => candidate.promptSpecId !== artifact.promptSpecId)) {
+    addIssue(
+      context,
+      ["candidates"],
+      "Every candidate must preserve the plan's frozen prompt specification.",
+    );
+  }
+  if (new Set(artifact.candidates.map((candidate) => candidate.promptHash)).size !== candidateIds.length) {
+    addIssue(
+      context,
+      ["candidates"],
+      "Every candidate must have a distinct prompt hash.",
+    );
+  }
+  const caseIds = artifact.heldOutCases.map((evalCase) => evalCase.id);
+  if (new Set(caseIds).size !== caseIds.length) {
+    addIssue(context, ["heldOutCases"], "Held-out evaluation case IDs must be unique.");
+  }
+}
+
 /** A serializable plan with no evaluation result or promotion claim. */
 export const CandidateOptimizationPlanSchema = CandidateOptimizationBaseSchema.extend({
   state: z.literal("awaiting_evidence"),
-});
+}).superRefine(assertOptimizationPlanScope);
 
 /**
  * A serializable evidence artifact. This is intentionally separate from a
@@ -130,7 +205,100 @@ export const CandidateOptimizationEvidenceSchema = CandidateOptimizationBaseSche
   runs: z.array(CandidateEvaluationRunSchema).min(1),
   comparisons: z.array(BlindedComparisonSchema).optional(),
   report: BestCandidateReportSchema,
+}).superRefine((artifact, context) => {
+  assertOptimizationPlanScope(artifact, context);
+
+  const candidateIds = new Set(artifact.candidates.map((candidate) => candidate.id));
+  const candidateHashes = new Map(
+    artifact.candidates.map((candidate) => [candidate.id, candidate.promptHash]),
+  );
+  const caseIds = new Set(artifact.heldOutCases.map((evalCase) => evalCase.id));
+  const observedCandidateIds = new Set(artifact.runs.map((run) => run.candidateId));
+  const observedCaseIds = new Set(artifact.runs.map((run) => run.caseId));
+
+  if (
+    observedCandidateIds.size !== candidateIds.size ||
+    [...observedCandidateIds].some((candidateId) => !candidateIds.has(candidateId))
+  ) {
+    addIssue(
+      context,
+      ["runs"],
+      "Runs must include every declared candidate and no unknown candidate IDs.",
+    );
+  }
+  if (
+    artifact.runs.some(
+      (run) =>
+        run.targetId !== artifact.targetId ||
+        run.promptHash !== candidateHashes.get(run.candidateId),
+    )
+  ) {
+    addIssue(
+      context,
+      ["runs"],
+      "Every run must name the plan target and the exact hash of its declared candidate prompt.",
+    );
+  }
+  if (
+    observedCaseIds.size !== caseIds.size ||
+    [...observedCaseIds].some((caseId) => !caseIds.has(caseId))
+  ) {
+    addIssue(
+      context,
+      ["runs"],
+      "Runs must cover every declared held-out case and no other cases.",
+    );
+  }
+
+  const comparisons = artifact.comparisons ?? [];
+  if (
+    comparisons.some(
+      (comparison) =>
+        !caseIds.has(comparison.caseId) ||
+        !candidateIds.has(comparison.leftCandidateId) ||
+        !candidateIds.has(comparison.rightCandidateId) ||
+        comparison.leftCandidateId === comparison.rightCandidateId ||
+        (comparison.winnerCandidateId !== null && !candidateIds.has(comparison.winnerCandidateId)),
+    )
+  ) {
+    addIssue(
+      context,
+      ["comparisons"],
+      "Comparisons may reference only distinct declared candidates and held-out cases.",
+    );
+  }
+
+  try {
+    const recomputed = selectBestTestedCandidate(toCandidateEvaluationRuns(artifact.runs), {
+      baselineCandidateId: artifact.baselineCandidateId,
+      minimumImprovement: artifact.minimumImprovement,
+      ...(comparisons.length === 0 ? {} : { comparisons }),
+    });
+    if (canonicalJson(recomputed) !== canonicalJson(artifact.report)) {
+      addIssue(
+        context,
+        ["report"],
+        "Promotion report does not match the supplied, scoped evaluation evidence.",
+      );
+    }
+  } catch (error) {
+    addIssue(
+      context,
+      ["runs"],
+      `Candidate evidence does not satisfy the promotion gate: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 });
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
+}
 
 function average(values: readonly number[]): number {
   return values.reduce((total, value) => total + value, 0) / values.length;
@@ -148,6 +316,37 @@ function optionalTotal(
 
 function runKey(run: CandidateEvaluationRun): string {
   return `${run.caseId}\u0000${String(run.repetition)}`;
+}
+
+function isSha256(value: string): boolean {
+  return /^[a-f0-9]{64}$/u.test(value);
+}
+
+/**
+ * Candidate scores are only comparable when they came from one target and
+ * each candidate's runs identify one immutable prompt. This protects direct
+ * library callers as well as serialized evidence artifacts.
+ */
+function assertComparablePromptSubjects(
+  grouped: ReadonlyMap<string, readonly CandidateEvaluationRun[]>,
+): void {
+  const targetIds = new Set<string>();
+  for (const [candidateId, candidateRuns] of grouped) {
+    const promptHashes = new Set<string>();
+    for (const run of candidateRuns) {
+      if (run.targetId.trim().length === 0 || !isSha256(run.promptHash)) {
+        throw new Error("Candidate evaluation runs must include a target ID and SHA-256 prompt hash.");
+      }
+      targetIds.add(run.targetId);
+      promptHashes.add(run.promptHash);
+    }
+    if (promptHashes.size !== 1) {
+      throw new Error(`Candidate ${candidateId} was evaluated with more than one prompt hash.`);
+    }
+  }
+  if (targetIds.size !== 1) {
+    throw new Error("Candidate promotion requires all runs to use one identical target.");
+  }
 }
 
 function assertIdenticalHeldOutRuns(
@@ -172,14 +371,31 @@ function assertIdenticalHeldOutRuns(
   }
 }
 
-function assertReversedOrderCoverage(comparisons: readonly BlindedComparison[]): void {
+function assertReversedOrderCoverage(
+  comparisons: readonly BlindedComparison[],
+  candidateIds: ReadonlySet<string>,
+  caseIds: ReadonlySet<string>,
+): void {
   const directions = new Set(
     comparisons.map(
       (comparison) =>
         `${comparison.caseId}\u0000${comparison.leftCandidateId}\u0000${comparison.rightCandidateId}`,
     ),
   );
+  if (directions.size !== comparisons.length) {
+    throw new Error("Subjective comparisons contain a duplicate case/candidate order.");
+  }
   for (const comparison of comparisons) {
+    if (!caseIds.has(comparison.caseId)) {
+      throw new Error(`Subjective comparison references unknown case ${comparison.caseId}.`);
+    }
+    if (
+      !candidateIds.has(comparison.leftCandidateId) ||
+      !candidateIds.has(comparison.rightCandidateId) ||
+      comparison.leftCandidateId === comparison.rightCandidateId
+    ) {
+      throw new Error("Subjective comparisons must compare two distinct evaluated candidates.");
+    }
     const reverse =
       `${comparison.caseId}\u0000${comparison.rightCandidateId}\u0000${comparison.leftCandidateId}`;
     if (!directions.has(reverse)) {
@@ -189,8 +405,8 @@ function assertReversedOrderCoverage(comparisons: readonly BlindedComparison[]):
     }
     if (
       comparison.winnerCandidateId !== null &&
-      comparison.winnerCandidateId !== comparison.leftCandidateId &&
-      comparison.winnerCandidateId !== comparison.rightCandidateId
+      (comparison.winnerCandidateId !== comparison.leftCandidateId &&
+        comparison.winnerCandidateId !== comparison.rightCandidateId)
     ) {
       throw new Error("A comparison winner must be one of its two candidates or null.");
     }
@@ -217,6 +433,8 @@ export function selectBestTestedCandidate(
   for (const run of runs) {
     if (
       run.candidateId.trim().length === 0 ||
+      run.targetId.trim().length === 0 ||
+      !isSha256(run.promptHash) ||
       run.caseId.trim().length === 0 ||
       !Number.isFinite(run.score) ||
       run.score < 0 ||
@@ -241,8 +459,13 @@ export function selectBestTestedCandidate(
   if (!grouped.has(options.baselineCandidateId)) {
     throw new Error("The baseline candidate has no evaluation runs.");
   }
+  assertComparablePromptSubjects(grouped);
   assertIdenticalHeldOutRuns(grouped);
-  assertReversedOrderCoverage(options.comparisons ?? []);
+  assertReversedOrderCoverage(
+    options.comparisons ?? [],
+    new Set(grouped.keys()),
+    new Set(runs.map((run) => run.caseId)),
+  );
 
   const summaries = [...grouped.entries()].map(([candidateId, candidateRuns]) => ({
     candidateId,

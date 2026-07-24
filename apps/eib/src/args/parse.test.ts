@@ -25,28 +25,13 @@ describe("parseArgs", () => {
     });
   });
 
-  it("parses and validates new-command schemas and tools", () => {
+  it("parses and validates a prompt output schema", () => {
     expect(
       parseArgs([
         "new",
         "Extract the title",
         "--schema",
         '{"type":"object","properties":{"title":{"type":"string"}}}',
-        "--tools",
-        JSON.stringify([
-          {
-            name: "read_document",
-            description: "Read one provided document by its stable identifier.",
-            inputSchema: {
-              type: "object",
-              properties: { id: { type: "string" } },
-              required: ["id"],
-              additionalProperties: false,
-            },
-            sideEffect: "read",
-            requiresApproval: false,
-          },
-        ]),
       ]),
     ).toMatchObject({
       name: "new",
@@ -54,13 +39,6 @@ describe("parseArgs", () => {
         type: "object",
         properties: { title: { type: "string" } },
       },
-      tools: [
-        {
-          name: "read_document",
-          sideEffect: "read",
-          requiresApproval: false,
-        },
-      ],
     });
   });
 
@@ -76,81 +54,13 @@ describe("parseArgs", () => {
     );
   });
 
-  it("rejects tools that do not match the canonical tool schema", () => {
-    expect(() =>
-      parseArgs(["new", "Brief", "--tools", '[{"name":"broken"}]']),
-    ).toThrow("--tools must be a JSON array of valid tool specifications");
-  });
-
-  it("accepts declarative MCP server specs without granting execution", () => {
-    const servers = [
-      {
-        name: "docs",
-        transport: "http",
-        endpoint: "https://mcp.example.test/v1",
-        allowedTools: ["search_docs"],
-        trust: "trusted",
-        requiresApproval: false,
-      },
-      {
-        name: "local_catalog",
-        transport: "stdio",
-        endpoint: "catalog-mcp",
-        allowedTools: ["find"],
-        trust: "untrusted",
-        requiresApproval: true,
-      },
-    ];
-    expect(parseArgs(["new", "Brief", "--mcp-servers", JSON.stringify(servers)])).toMatchObject({
-      name: "new",
-      mcpServers: servers,
-    });
-  });
-
-  it("rejects executable snippets, secrets, and unapproved untrusted MCP declarations", () => {
-    const base = {
-      name: "catalog",
-      transport: "stdio",
-      endpoint: "npx --yes dangerous-package",
-      allowedTools: ["find"],
-      trust: "trusted",
-      requiresApproval: false,
-    };
-    expect(() => parseArgs(["new", "Brief", "--mcp-servers", JSON.stringify([base])])).toThrow(
-      "declarative, valid MCP server specifications",
+  it("rejects retired runtime configuration options", () => {
+    expect(() => parseArgs(["new", "Brief", "--tools", "[]"])).toThrow(
+      "Unknown option: --tools",
     );
-    expect(() => parseArgs([
-      "new",
-      "Brief",
-      "--mcp-servers",
-      JSON.stringify([{
-        ...base,
-        transport: "http",
-        endpoint: "https://token@example.test/mcp",
-      }]),
-    ])).toThrow("declarative, valid MCP server specifications");
-    expect(() => parseArgs([
-      "new",
-      "Brief",
-      "--mcp-servers",
-      JSON.stringify([{
-        ...base,
-        endpoint: "catalog-mcp",
-        trust: "untrusted",
-      }]),
-    ])).toThrow("declarative, valid MCP server specifications");
-    expect(() => parseArgs([
-      "new",
-      "Brief",
-      "--mcp-servers",
-      JSON.stringify([{
-        ...base,
-        endpoint: "catalog-mcp",
-      }, {
-        ...base,
-        endpoint: "another-catalog-mcp",
-      }]),
-    ])).toThrow("declarative, valid MCP server specifications");
+    expect(() => parseArgs(["new", "Brief", "--mcp-servers", "[]"])).toThrow(
+      "Unknown option: --mcp-servers",
+    );
   });
 
   it("requires explicit execution consent for proxy evaluation", () => {
@@ -227,27 +137,9 @@ describe("parseArgs", () => {
     ).toThrow("--allow-execution is only valid for proxy or live evaluation");
   });
 
-  it("keeps install as a dry-run unless --apply is present", () => {
-    expect(
-      parseArgs(["install", "package.json", "--target", "./project"]),
-    ).toMatchObject({ name: "install", apply: false });
-  });
-
-  it("requires an explicit statement for a human approval record", () => {
-    expect(parseArgs([
-      "approve",
-      "package",
-      "--statement",
-      "I reviewed this exact package revision.",
-    ])).toEqual({
-      name: "approve",
-      global: { json: false },
-      packagePath: "package",
-      statement: "I reviewed this exact package revision.",
-    });
-    expect(() => parseArgs(["approve", "package"])).toThrow(
-      "approve requires a non-empty --statement",
-    );
+  it("rejects retired agent-runtime commands", () => {
+    expect(() => parseArgs(["install", "package.json"])).toThrow("Unknown command: install");
+    expect(() => parseArgs(["approve", "package"])).toThrow("Unknown command: approve");
   });
 
   it("parses the minimal credential-free preferences workflow", () => {

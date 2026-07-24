@@ -76,7 +76,7 @@ export function App({ services, signal, onCancel }: AppProps) {
         <Text bold>Local backend readiness</Text>
         <Box marginTop={1} flexDirection="column">
           {doctor === undefined && doctorError === undefined ? (
-            <Text color="cyan">Checking local CLIs without reading credentials…</Text>
+          <Text color="cyan">Checking local prompt evaluators without reading credentials…</Text>
           ) : null}
           {doctor !== undefined ? <Text>{doctor.message}</Text> : null}
           {doctorError !== undefined ? <Text color="red">{doctorError}</Text> : null}
@@ -89,14 +89,14 @@ export function App({ services, signal, onCancel }: AppProps) {
   return (
     <Box flexDirection="column">
       <Text bold color="cyan">Explain It Better</Text>
-      <Text>Turn fuzzy intent into a verified, provider-aware agent package.</Text>
+      <Text>Turn a human demand into a clear, target-aware prompt.</Text>
       <Box marginTop={1} flexDirection="column">
-        <Text><Text color="cyan">n / Enter</Text>  New prompt package</Text>
-        <Text><Text color="cyan">d</Text>          Doctor: local backend readiness</Text>
+        <Text><Text color="cyan">n / Enter</Text>  Shape a new prompt</Text>
+        <Text><Text color="cyan">d</Text>          Doctor: local evaluator readiness</Text>
         <Text><Text color="cyan">q</Text>          Quit</Text>
       </Box>
       <Box marginTop={1}>
-        <Text dimColor>Generated packages are never launched automatically.</Text>
+        <Text dimColor>Every result is a prompt for a person to inspect and paste.</Text>
       </Box>
     </Box>
   );

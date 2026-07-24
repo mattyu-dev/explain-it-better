@@ -1,4 +1,4 @@
-import type { AgentBlueprint, TargetProfile } from "../contracts.js";
+import type { PromptSpec, TargetProfile } from "../contracts.js";
 import type { CompatibilityIssue } from "./lint.js";
 import type { PromptCandidate } from "./candidates.js";
 
@@ -11,7 +11,7 @@ export interface RenderedTarget {
   appliedRuleIds: string[];
 }
 export interface TargetRenderContext {
-  blueprint: AgentBlueprint;
+  prompt: PromptSpec;
   candidate: PromptCandidate;
   profile: TargetProfile;
   compatibilityIssues: CompatibilityIssue[];

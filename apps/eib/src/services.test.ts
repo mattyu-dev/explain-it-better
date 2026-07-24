@@ -6,19 +6,6 @@ import { readPromptPackage } from "@eib/core";
 import { getRulesForProfile } from "@eib/knowledge";
 import { createCliServices } from "./services.js";
 
-const READ_TOOL = {
-  name: "repo.read_file",
-  description: "Read one file from the current repository without modifying it.",
-  inputSchema: {
-    type: "object",
-    properties: { path: { type: "string" } },
-    required: ["path"],
-    additionalProperties: false,
-  },
-  sideEffect: "read" as const,
-  requiresApproval: false,
-};
-
 describe("CLI services", () => {
   it("uses complete static fixture outputs to record static validation", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-static-fixtures-"));
@@ -173,7 +160,6 @@ describe("CLI services", () => {
           fast: true,
           targets: ["openai-gpt-5.6-api"],
           output: source,
-          tools: [READ_TOOL],
         },
         signal,
       );
@@ -201,7 +187,7 @@ describe("CLI services", () => {
         ),
       ).toBe(true);
       expect(improvedPackage.artifacts[0]?.content).toContain(feedback);
-      expect(improvedPackage.blueprint.tools).toEqual([READ_TOOL]);
+      expect(improvedPackage.prompt.demand.preferences).toContain(`Improvement feedback: ${feedback}`);
       expect((await readFile(join(source, "prompt-package.json"), "utf8"))).toContain(
         originalPackage.id,
       );
@@ -211,8 +197,8 @@ describe("CLI services", () => {
     }
   });
 
-  it("carries explicit schemas and tools into the blueprint and provider request", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-schema-tools-"));
+  it("carries an explicit output schema into the prompt and provider request", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-schema-prompt-"));
     const services = createCliServices();
     const outputSchema = {
       type: "object",
@@ -230,58 +216,21 @@ describe("CLI services", () => {
           targets: ["openai-gpt-5.6-api"],
           output: root,
           outputSchema,
-          tools: [READ_TOOL],
         },
         new AbortController().signal,
       );
 
       const promptPackage = await readPromptPackage(root);
-      expect(promptPackage.blueprint.intent.outputContract).toMatchObject({
+      expect(promptPackage.prompt.demand.outputContract).toMatchObject({
         format: "JSON",
         schema: outputSchema,
       });
-      expect(promptPackage.blueprint.tools).toEqual([READ_TOOL]);
       const payload = JSON.parse(promptPackage.artifacts[0]!.content) as Record<string, unknown>;
-      expect(payload).toHaveProperty("tools.0.name", READ_TOOL.name);
       expect(payload).toHaveProperty("text.format.schema", outputSchema);
       expect(
         promptPackage.evals.find((evalCase) => evalCase.category === "output_schema")
           ?.deterministicChecks,
       ).toContain("valid_json");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("persists MCP declarations without starting or binding a server", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-mcp-config-"));
-    const services = createCliServices();
-    const mcpServers = [{
-      name: "docs",
-      transport: "http" as const,
-      endpoint: "https://mcp.example.test/v1",
-      allowedTools: ["search_docs"],
-      trust: "trusted" as const,
-      requiresApproval: false,
-    }];
-    try {
-      const result = await services.execute(
-        {
-          name: "new",
-          global: { json: true },
-          brief: "Write a concise Markdown checklist for a product manager.",
-          fast: true,
-          targets: ["openai-gpt-5.6-api"],
-          output: root,
-          mcpServers,
-        },
-        new AbortController().signal,
-      );
-      const promptPackage = await readPromptPackage(root);
-      expect(result.exitCode).toBe(0);
-      expect(promptPackage.blueprint.mcpServers).toEqual(mcpServers);
-      expect(await readFile(join(root, "mcp-servers.json"), "utf8")).toContain("mcp.example.test");
-      expect(promptPackage.artifacts[0]?.warnings.join(" ")).toContain("does not start, contact, or bind");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -301,10 +250,10 @@ describe("CLI services", () => {
     const expected = new Map([
       ["openai-gpt-5.6-chatgpt", ["prompt.md", "Paste-ready prompt"]],
       ["anthropic-claude-sonnet-5-chat", ["prompt.md", "<task>"]],
-      ["openai-gpt-5.6-codex", ["AGENTS.md", "Codex repository instructions"]],
+      ["openai-gpt-5.6-codex", ["AGENTS.md", "Codex project prompt"]],
       ["anthropic-claude-code-sonnet-5", ["CLAUDE.md", "Claude Code project instructions"]],
-      ["kimi-code-cli", [".kimi/instructions.md", "Export target only"]],
-      ["hermes-agent", [".hermes/skills/explain-it-better/SKILL.md", "name: explain-it-better-agent"]],
+      ["kimi-code-cli", [".kimi/instructions.md", "Kimi Code project instructions"]],
+      ["hermes-agent", [".hermes/skills/explain-it-better/SKILL.md", "name: explain-it-better-prompt"]],
     ]);
     try {
       await services.execute(
@@ -392,7 +341,8 @@ describe("CLI services", () => {
       expect(planned.exitCode).toBe(3);
       expect(planned.status).toBe("needs_input");
       const plan = JSON.parse(await readFile(planPath, "utf8")) as {
-        candidates: Array<{ id: string }>;
+        targetId: string;
+        candidates: Array<{ id: string; promptHash: string }>;
       };
       expect(plan.candidates).toHaveLength(2);
 
@@ -400,6 +350,8 @@ describe("CLI services", () => {
         runsPath,
         `${JSON.stringify(plan.candidates.map((candidate) => ({
           candidateId: candidate.id,
+          targetId: plan.targetId,
+          promptHash: candidate.promptHash,
           caseId: sourceBefore.evals[0]!.id,
           repetition: 0,
           score: 0.8,
@@ -425,6 +377,8 @@ describe("CLI services", () => {
       const runs = sourceBefore.evals.flatMap((evalCase) => [
         {
           candidateId: plan.candidates[0]!.id,
+          targetId: plan.targetId,
+          promptHash: plan.candidates[0]!.promptHash,
           caseId: evalCase.id,
           repetition: 0,
           score: 0.8,
@@ -434,6 +388,8 @@ describe("CLI services", () => {
         },
         {
           candidateId: plan.candidates[1]!.id,
+          targetId: plan.targetId,
+          promptHash: plan.candidates[1]!.promptHash,
           caseId: evalCase.id,
           repetition: 0,
           score: 0.9,
@@ -466,52 +422,6 @@ describe("CLI services", () => {
       });
       const sourceAfter = await readPromptPackage(packageDirectory);
       expect(sourceAfter).toEqual(sourceBefore);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it("records an auditable human approval in an owned package", async () => {
-    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-approval-"));
-    const destination = join(root, "package");
-    const services = createCliServices({
-      appDataPaths: {
-        preferencesFile: join(root, "preferences.json"),
-        knowledgeCacheDirectory: join(root, "knowledge-cache"),
-      },
-    });
-    try {
-      await services.execute(
-        {
-          name: "new",
-          global: { json: true },
-          brief: "Write a concise Markdown checklist for a product manager.",
-          fast: true,
-          targets: ["openai-gpt-5.6-api"],
-          output: destination,
-        },
-        new AbortController().signal,
-      );
-      const before = await readPromptPackage(destination);
-      const approved = await services.execute(
-        {
-          name: "approve",
-          global: { json: true },
-          packagePath: destination,
-          statement: "I reviewed this exact package revision for its declared use.",
-        },
-        new AbortController().signal,
-      );
-      expect(approved.exitCode).toBe(0);
-      const persisted = await readPromptPackage(destination);
-      expect(persisted.verification).toBe("human_approved");
-      expect(persisted.approvalRecords).toHaveLength(1);
-      expect(persisted.approvalRecords[0]).toMatchObject({
-        approver: "human",
-        statement: "I reviewed this exact package revision for its declared use.",
-      });
-      expect(persisted.approvalRecords[0]?.approvedPackageHash).toMatch(/^[a-f0-9]{64}$/);
-      expect(before.approvalRecords).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

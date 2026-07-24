@@ -19,7 +19,8 @@ It does not publish packages.
 
 ## Change expectations
 
-- Keep the compiler deterministic; do not make model calls during compilation.
+- Keep prompt creation deterministic; do not make model calls during
+  compilation.
 - Preserve fail-closed behavior for unsupported provider capabilities and
   verification claims.
 - Add or update tests for behavioral changes. Do not lower coverage thresholds
@@ -33,9 +34,9 @@ It does not publish packages.
 ## Pull requests
 
 Describe the user-visible effect, verification performed, and any limitations.
-For changes to target profiles, evaluation, installation, or security policy,
-include the affected safety/verification boundary explicitly. Require a green
-CI run and at least one reviewer before merging to `main`.
+For changes to target profiles, prompt rendering, evaluation, or security
+policy, include the affected safety/verification boundary explicitly. Require
+a green CI run and at least one reviewer before merging to `main`.
 
 ## Reporting vulnerabilities
 

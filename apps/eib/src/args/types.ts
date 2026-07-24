@@ -1,4 +1,4 @@
-import type { AgentBlueprint, IntentContract } from "@eib/core";
+import type { IntentContract } from "@eib/core";
 
 export const EIB_VERSION = "0.1.0";
 
@@ -32,9 +32,6 @@ export type CliCommand =
       targets: string[];
       output?: string;
       outputSchema?: NonNullable<IntentContract["outputContract"]["schema"]>;
-      tools?: AgentBlueprint["tools"];
-      /** Declarative server configuration; CLI never starts these servers. */
-      mcpServers?: AgentBlueprint["mcpServers"];
       clarifications?: ReadonlyArray<{
         field: string;
         answer: string;
@@ -59,6 +56,8 @@ export type CliCommand =
       global: GlobalOptions;
       packagePath: string;
       maxCandidates: CandidateCount;
+      /** Exact rendered target used for candidate evidence. */
+      target?: string;
       runs?: string;
       comparisons?: string;
       minimumImprovement?: number;
@@ -86,20 +85,6 @@ export type CliCommand =
       global: GlobalOptions;
       packagePath: string;
       format: ExportFormat;
-      output?: string;
-    }
-  | {
-      name: "install";
-      global: GlobalOptions;
-      packagePath: string;
-      target: string;
-      apply: boolean;
-    }
-  | {
-      name: "approve";
-      global: GlobalOptions;
-      packagePath: string;
-      statement: string;
       output?: string;
     }
   | {

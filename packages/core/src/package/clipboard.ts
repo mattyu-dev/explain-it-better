@@ -65,7 +65,7 @@ export function formatPromptPackageForClipboard(promptPackage: PromptPackage): s
       `## ${artifact.targetId}: ${artifact.filename}\n\n${artifact.content}`,
   );
   return [
-    `# ${promptPackage.blueprint.id}`,
+    `# ${promptPackage.prompt.id}`,
     "",
     `Package: ${promptPackage.id}`,
     `Verification: ${promptPackage.verification}`,

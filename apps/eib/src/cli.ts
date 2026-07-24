@@ -5,7 +5,6 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { render } from "ink";
 import { createElement } from "react";
-import { formatInstallPlan, isInstallPlan } from "@eib/core";
 import { parseArgs } from "./args/parse.js";
 import { renderHelp } from "./args/help.js";
 import { EIB_VERSION, ExitCode, type CliCommand } from "./args/types.js";
@@ -56,11 +55,6 @@ function isCancellation(error: unknown, signal: AbortSignal): boolean {
         error.message.toLowerCase().includes("cancelled") ||
         error.message.toLowerCase().includes("canceled")))
   );
-}
-
-function installPlanFromResultData(data: unknown): unknown {
-  if (typeof data !== "object" || data === null || !("plan" in data)) return undefined;
-  return data.plan;
 }
 
 export async function runCli(
@@ -142,14 +136,6 @@ export async function runCli(
       );
     } else {
       io.stdout.write(`${result.message}\n`);
-      const possibleInstallPlan = installPlanFromResultData(result.data);
-      if (
-        command.name === "install" &&
-        command.apply === false &&
-        isInstallPlan(possibleInstallPlan)
-      ) {
-        io.stdout.write(formatInstallPlan(possibleInstallPlan));
-      }
       if (result.status === "needs_input" && result.data !== undefined) {
         io.stdout.write('Continue interactively with "eib" or provide the missing option.\n');
       }

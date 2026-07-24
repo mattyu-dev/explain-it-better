@@ -16,6 +16,18 @@ import {
 export type ExternalEvaluationMode = "proxy" | "live";
 export type ExternalEvalResult = ReturnType<typeof EvalResultSchema.parse>;
 
+/**
+ * External evaluation measures the quality of the answer elicited by a prompt
+ * for a declared input and rubric. It is not an evaluation of autonomous
+ * execution, tool use, or whether an evaluator happens to complete a task.
+ */
+export const PROMPT_QUALITY_EVALUATION_CONTRACT = Object.freeze([
+  "Evaluate the answer elicited by the compiled prompt for this evaluation input.",
+  "Judge only the declared expected properties, rubric, output contract, and explicit constraints.",
+  "Do not credit tool use, side effects, autonomy, or task completion outside the requested answer.",
+  "Give concise observable evidence for the pass/fail decision; never provide hidden chain-of-thought.",
+] as const);
+
 export interface ExternalEvaluationRequest {
   readonly mode: ExternalEvaluationMode;
   readonly allowExecution?: boolean;
@@ -25,6 +37,8 @@ export interface ExternalEvaluationRequest {
 
 export interface ExternalEvaluationInvocation {
   readonly mode: ExternalEvaluationMode;
+  readonly focus: "prompt_quality";
+  readonly evaluationContract: readonly string[];
   readonly promptPackage: PromptPackage;
   readonly evalCases: readonly EvalCase[];
   readonly repetition: number;
@@ -74,7 +88,7 @@ function subjectHash(promptPackage: PromptPackage): string {
     .update(
       canonicalJson({
         id: promptPackage.id,
-        blueprint: promptPackage.blueprint,
+        prompt: promptPackage.prompt,
         artifacts: promptPackage.artifacts,
         evals: promptPackage.evals,
         knowledge: promptPackage.knowledge,
@@ -88,6 +102,14 @@ function withoutUntrustedProvenance(rawResult: unknown): unknown {
   const result = { ...rawResult };
   Reflect.deleteProperty(result, "provenance");
   return result;
+}
+
+function assertPromptQualityEvidence(result: ExternalEvalResult, backendId: string): void {
+  if (!result.evidence.some((entry) => entry.trim().length > 0)) {
+    throw new Error(
+      `Backend ${JSON.stringify(backendId)} returned no observable prompt-quality evidence for case ${JSON.stringify(result.caseId)}.`,
+    );
+  }
 }
 
 /**
@@ -156,6 +178,8 @@ export async function runExternalEvaluation(
     throwIfAborted(request.signal);
     const invocation: ExternalEvaluationInvocation = {
       mode: request.mode,
+      focus: "prompt_quality",
+      evaluationContract: PROMPT_QUALITY_EVALUATION_CONTRACT,
       promptPackage: validatedPackage,
       evalCases: validatedPackage.evals,
       repetition,
@@ -174,6 +198,7 @@ export async function runExternalEvaluation(
         subjectHash: evaluatedSubjectHash,
       };
       const result = EvalResultSchema.parse({ ...parsed, provenance });
+      assertPromptQualityEvidence(result, backend.id);
       if (result.mode !== request.mode) {
         throw new Error(
           `Backend ${JSON.stringify(backend.id)} returned mode ${JSON.stringify(result.mode)} during ${request.mode} evaluation.`,

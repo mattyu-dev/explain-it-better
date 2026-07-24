@@ -1,18 +1,14 @@
 {
   "version": 1,
-  "packageId": "eib-000cc7d8-dd95-415d-8ca4-fddf1ce91e7b",
+  "packageId": "sourced-decision-memo",
   "files": {
-    "prompt-package.json": "1e8bcbac914b8e203de454cc0597c4bc276528f364a7b9e1f62773ab374031c7",
-    "blueprint.json": "eaed347b5809f0576fcb79b667daec807feebb73f035f77f9348ad322b772204",
-    "original-brief.md": "aaa9151c470529fbd42d29457fcb81b4790d3789528f01995d2288792c162222",
-    "evals.jsonl": "dcb43bc2a8e2aa7c287cf2656ffcca7a17f1cd535794a9cb4a2ea7e9997b70aa",
-    "provenance.json": "1bbf6e5da92ded9715560cde23c12ac08c4ec021d0b07fde52190e2282605cc0",
-    "verification-report.md": "71e173f82abc97cab2e5d05e2d21cb80d14a78dd1a732b29194e8f4373ee6ab4",
-    "tools.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-    "mcp-servers.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-    "typed-inputs.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-    "approval-policy.json": "c9580be6601d3e2b1e9c9566ec2c996d35831a958e8a41398690bf6c2623f38f",
-    "subagents.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
-    "artifacts/openai-gpt-5.6-api/request.json": "c406755e34708fadbc14f6d123ae481d4d273c50df45968eb1abaceccfa1d017"
+    "prompt-package.json": "b223f4b38c205eb65c93ca09b8a7ec5aa6be4e2aa06b55e38cb0137eb0c25aeb",
+    "prompt.json": "d47f6d7293dc3f0fe1095841e6ab931622f38149514ce78b9aeb106235d18238",
+    "original-brief.md": "26b44e0f0f2d8cd8966d5dde748f63f25c3fa1794c8c843bd0c170efc3eba77f",
+    "evals.jsonl": "0a9560723f4dbe7d471eb8a407fd11465faf00b6829a08e67f56d96ff99cc644",
+    "provenance.json": "2b5a686149e81ce5945a253bd45ee9b6a7189e6d7ae0217dafc8c359149db5c9",
+    "verification-report.md": "570cf98b14c3cd2bca6b8ed771e9bff41a31a1f555b122f382f887cdacad7cd5",
+    "input-bindings.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+    "artifacts/openai-gpt-5.6-api/prompt.md": "4b85b4f2b5922cd1fc8994b0b273080ea2b53dd0209b6e420bec4c6b85db74a2"
   }
 }

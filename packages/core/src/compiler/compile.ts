@@ -1,4 +1,4 @@
-import type { AgentBlueprint, TargetProfile } from "../contracts.js";
+import type { PromptSpec, TargetProfile } from "../contracts.js";
 import type { PromptCandidate } from "./candidates.js";
 import { generatePromptCandidates } from "./candidates.js";
 import {
@@ -32,14 +32,14 @@ function estimatePromptTokens(prompt: string): number {
  */
 export function compileCandidate(
   registry: RendererRegistry,
-  blueprint: AgentBlueprint,
+  prompt: PromptSpec,
   candidate: PromptCandidate,
   profile: TargetProfile,
   options: CompileCandidateOptions = {},
 ): RenderedTarget {
-  if (candidate.blueprintId !== blueprint.id) {
+  if (candidate.promptSpecId !== prompt.id) {
     throw new Error(
-      `Candidate "${candidate.id}" belongs to blueprint "${candidate.blueprintId}", not "${blueprint.id}".`,
+      `Candidate "${candidate.id}" belongs to prompt specification "${candidate.promptSpecId}", not "${prompt.id}".`,
     );
   }
   const estimatedInputTokens =
@@ -48,7 +48,7 @@ export function compileCandidate(
     throw new Error("Estimated input tokens must be a non-negative safe integer.");
   }
   const lintContext = {
-    blueprint,
+    prompt,
     candidate,
     profile,
     ...(options.requestedReasoningMode
@@ -61,7 +61,7 @@ export function compileCandidate(
   assertCompatible(issues);
   const renderer = registry.resolve(profile);
   const renderContext: TargetRenderContext = {
-    blueprint,
+    prompt,
     candidate,
     profile,
     compatibilityIssues: issues,
@@ -110,7 +110,7 @@ export interface TargetCompilationRules extends CompileCandidateOptions {
  * serializer, while this core owns candidate generation and fail-closed linting.
  */
 export function compileForTarget(
-  blueprint: AgentBlueprint,
+  prompt: PromptSpec,
   profile: TargetProfile,
   rules: TargetCompilationRules,
 ): RenderedTarget {
@@ -118,11 +118,11 @@ export function compileForTarget(
     rules.renderer instanceof RendererRegistry
       ? rules.renderer
       : new RendererRegistry([rules.renderer]);
-  const candidate = rules.candidate ?? generatePromptCandidates(blueprint, { maxCandidates: 1 })[0];
+  const candidate = rules.candidate ?? generatePromptCandidates(prompt, { maxCandidates: 1 })[0];
   if (!candidate) {
     throw new Error("Candidate generation produced no result.");
   }
-  return compileCandidate(registry, blueprint, candidate, profile, {
+  return compileCandidate(registry, prompt, candidate, profile, {
     ...(rules.requestedReasoningMode
       ? { requestedReasoningMode: rules.requestedReasoningMode }
       : {}),

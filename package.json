@@ -11,8 +11,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
-    "clean": "tsc -b --clean",
+    "build": "npm run clean && tsc -b",
+    "clean": "node scripts/clean-build.mjs",
     "dev": "npm run dev --workspace @eib/cli",
     "lint": "eslint .",
     "pack:check": "node scripts/validate-package-contents.mjs",

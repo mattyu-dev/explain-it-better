@@ -1,4 +1,6 @@
-import type { AgentBlueprint, TargetProfile } from "../contracts.js";
+import { createHash } from "node:crypto";
+
+import type { PromptSpec, TargetProfile } from "../contracts.js";
 import { analyzeTaskRequirements } from "../blueprint/index.js";
 import type { PromptCandidate } from "./candidates.js";
 
@@ -13,7 +15,7 @@ export interface CompatibilityIssue {
 }
 
 export interface CompatibilityContext {
-  blueprint: AgentBlueprint;
+  prompt: PromptSpec;
   candidate: PromptCandidate;
   profile: TargetProfile;
   requestedReasoningMode?: string;
@@ -61,11 +63,11 @@ function normalizedInstruction(value: string): string {
 
 function contradictoryInstruction(context: CompatibilityContext): string | undefined {
   const values = [
-    context.blueprint.intent.objective,
-    ...context.blueprint.intent.deliverables,
-    ...context.blueprint.intent.constraints,
-    ...context.blueprint.intent.preferences,
-    ...context.blueprint.intent.exclusions,
+    context.prompt.demand.objective,
+    ...context.prompt.demand.deliverables,
+    ...context.prompt.demand.constraints,
+    ...context.prompt.demand.preferences,
+    ...context.prompt.demand.exclusions,
   ].map(normalizedInstruction);
   const positive = new Set(
     values.filter((value) => !/^(?:do not|dont|never|must not)\s+/u.test(value)),
@@ -88,30 +90,8 @@ function contradictoryInstruction(context: CompatibilityContext): string | undef
 const capabilityRule: CompatibilityRule = {
   id: "builtin.capabilities",
   check(context) {
-    const requirements = analyzeTaskRequirements(context.blueprint.intent);
+    const requirements = analyzeTaskRequirements(context.prompt.demand);
     const issues: CompatibilityIssue[] = [];
-    if (requirements.tools && !context.profile.supports.tools) {
-      issues.push(
-        issue(
-          context,
-          this.id,
-          "TOOLS_UNSUPPORTED",
-          "error",
-          "The intent requires tools but the target does not support tools.",
-        ),
-      );
-    }
-    if (requirements.tools && context.blueprint.tools.length === 0) {
-      issues.push(
-        issue(
-          context,
-          this.id,
-          "TOOLS_UNBOUND",
-          "warning",
-          "The intent requires tools, but no portable tool definitions were supplied; the target runtime must bind and verify them.",
-        ),
-      );
-    }
     if (requirements.structuredOutput && !context.profile.supports.structuredOutput) {
       issues.push(
         issue(
@@ -226,30 +206,16 @@ const semanticBoundaryRule: CompatibilityRule = {
       );
     }
     if (
-      context.blueprint.tools.some(
-        (tool) =>
-          (tool.sideEffect === "write" || tool.sideEffect === "external") &&
-          !tool.requiresApproval,
-      )
+      createHash("sha256").update(context.candidate.semanticPrompt).digest("hex") !==
+      context.candidate.promptHash
     ) {
       issues.push(
         issue(
           context,
           this.id,
-          "UNAPPROVED_CONSEQUENTIAL_TOOL",
+          "PROMPT_HASH_MISMATCH",
           "error",
-          "A consequential tool must require approval.",
-        ),
-      );
-    }
-    if (context.blueprint.mcpServers.length > 0) {
-      issues.push(
-        issue(
-          context,
-          this.id,
-          "MCP_CONFIGURATION_DECLARATIVE",
-          "warning",
-          "MCP server declarations are portable configuration only; this compiled artifact does not start, contact, or bind MCP servers.",
+          "The candidate prompt no longer matches its recorded digest.",
         ),
       );
     }
@@ -289,12 +255,14 @@ export interface TargetLintOptions {
   rules?: readonly CompatibilityRule[];
 }
 
-function defaultLintCandidate(blueprint: AgentBlueprint): PromptCandidate {
+function defaultLintCandidate(prompt: PromptSpec): PromptCandidate {
+  const semanticPrompt = prompt.demand.objective;
   return {
-    id: `${blueprint.id}-lint`,
+    id: `${prompt.id}-lint`,
     dimension: "baseline",
-    blueprintId: blueprint.id,
-    semanticPrompt: blueprint.intent.objective,
+    promptSpecId: prompt.id,
+    semanticPrompt,
+    promptHash: createHash("sha256").update(semanticPrompt).digest("hex"),
     changeLog: ["Synthetic lint candidate."],
   };
 }
@@ -304,30 +272,30 @@ export function lintCompatibility(
   rules?: readonly CompatibilityRule[],
 ): CompatibilityIssue[];
 export function lintCompatibility(
-  blueprint: AgentBlueprint,
+  prompt: PromptSpec,
   profile: TargetProfile,
   options?: TargetLintOptions,
 ): CompatibilityIssue[];
 export function lintCompatibility(
-  contextOrBlueprint: CompatibilityContext | AgentBlueprint,
+  contextOrPrompt: CompatibilityContext | PromptSpec,
   rulesOrProfile: readonly CompatibilityRule[] | TargetProfile = [],
   options: TargetLintOptions = {},
 ): CompatibilityIssue[] {
-  if ("candidate" in contextOrBlueprint && "profile" in contextOrBlueprint) {
+  if ("candidate" in contextOrPrompt && "profile" in contextOrPrompt) {
     return lintCompatibilityContext(
-      contextOrBlueprint,
+      contextOrPrompt,
       Array.isArray(rulesOrProfile)
         ? (rulesOrProfile as readonly CompatibilityRule[])
         : [],
     );
   }
   if (Array.isArray(rulesOrProfile)) {
-    throw new Error("A target profile is required when linting a blueprint.");
+    throw new Error("A target profile is required when linting a prompt specification.");
   }
   const profile = rulesOrProfile as TargetProfile;
   const context: CompatibilityContext = {
-    blueprint: contextOrBlueprint,
-    candidate: options.candidate ?? defaultLintCandidate(contextOrBlueprint),
+    prompt: contextOrPrompt,
+    candidate: options.candidate ?? defaultLintCandidate(contextOrPrompt),
     profile,
     ...(options.requestedReasoningMode
       ? { requestedReasoningMode: options.requestedReasoningMode }

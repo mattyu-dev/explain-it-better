@@ -1,4 +1,4 @@
-import { IntentContractSchema, McpServerSpecsSchema, ToolSpecSchema } from "@eib/core";
+import { IntentContractSchema } from "@eib/core";
 import type {
   CandidateCount,
   CliCommand,
@@ -22,22 +22,18 @@ const VALUE_OPTIONS = new Set([
   "fixtures",
   "format",
   "mode",
-  "mcp-servers",
   "minimum-improvement",
   "output",
   "runs",
   "comparisons",
   "max-candidates",
   "schema",
-  "statement",
   "source",
   "target",
-  "tools",
 ]);
 
 const FLAG_OPTIONS = new Set([
   "allow-execution",
-  "apply",
   "fast",
   "help",
   "json",
@@ -164,44 +160,6 @@ function parseOutputSchema(
   return result.data;
 }
 
-function parseTools(
-  parsed: ParsedTokens,
-): Extract<CliCommand, { name: "new" }>["tools"] | undefined {
-  const raw = one(parsed, "tools");
-  if (raw === undefined) {
-    return undefined;
-  }
-  const result = ToolSpecSchema.array().safeParse(parseJson(raw, "tools"));
-  if (!result.success) {
-    const reason =
-      result.error.issues[0]?.message ??
-      "the value does not match the canonical tool contract";
-    throw new UsageError(
-      `--tools must be a JSON array of valid tool specifications: ${reason}`,
-    );
-  }
-  return result.data;
-}
-
-function parseMcpServers(
-  parsed: ParsedTokens,
-): Extract<CliCommand, { name: "new" }>["mcpServers"] | undefined {
-  const raw = one(parsed, "mcp-servers");
-  if (raw === undefined) {
-    return undefined;
-  }
-  const result = McpServerSpecsSchema.safeParse(parseJson(raw, "mcp-servers"));
-  if (!result.success) {
-    const reason =
-      result.error.issues[0]?.message ??
-      "the value does not match the canonical MCP server contract";
-    throw new UsageError(
-      `--mcp-servers must be a JSON array of declarative, valid MCP server specifications: ${reason}`,
-    );
-  }
-  return result.data;
-}
-
 function rejectOptions(
   parsed: ParsedTokens,
   allowedValues: readonly string[],
@@ -255,7 +213,7 @@ export function parseArgs(argv: readonly string[]): CliCommand {
     case "new": {
       rejectOptions(
         parsed,
-        ["brief", "output", "schema", "target", "tools", "mcp-servers"],
+        ["brief", "output", "schema", "target"],
         ["fast"],
       );
       const explicitBrief = one(parsed, "brief");
@@ -266,8 +224,6 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       const brief = explicitBrief ?? positionalBrief;
       const output = one(parsed, "output");
       const outputSchema = parseOutputSchema(parsed);
-      const tools = parseTools(parsed);
-      const mcpServers = parseMcpServers(parsed);
       return {
         name: "new",
         global,
@@ -276,8 +232,6 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         targets: many(parsed, "target"),
         ...(output === undefined ? {} : { output }),
         ...(outputSchema === undefined ? {} : { outputSchema }),
-        ...(tools === undefined ? {} : { tools }),
-        ...(mcpServers === undefined ? {} : { mcpServers }),
       };
     }
     case "improve": {
@@ -299,12 +253,13 @@ export function parseArgs(argv: readonly string[]): CliCommand {
     case "optimize": {
       rejectOptions(
         parsed,
-        ["runs", "comparisons", "max-candidates", "minimum-improvement", "output"],
+        ["runs", "comparisons", "max-candidates", "minimum-improvement", "output", "target"],
         [],
       );
       const runs = one(parsed, "runs");
       const comparisons = one(parsed, "comparisons");
       const output = one(parsed, "output");
+      const target = one(parsed, "target");
       if (comparisons !== undefined && runs === undefined) {
         throw new UsageError("--comparisons requires --runs");
       }
@@ -320,6 +275,7 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         global,
         packagePath: packagePath(parsed.positionals, "optimize"),
         maxCandidates: parseCandidateCount(one(parsed, "max-candidates")),
+        ...(target === undefined ? {} : { target }),
         ...(runs === undefined ? {} : { runs }),
         ...(comparisons === undefined ? {} : { comparisons }),
         ...(minimumImprovement === undefined ? {} : { minimumImprovement }),
@@ -415,35 +371,6 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         global,
         packagePath: packagePath(parsed.positionals, "export"),
         format: formatValue,
-        ...(output === undefined ? {} : { output }),
-      };
-    }
-    case "install": {
-      rejectOptions(parsed, ["target"], ["apply"]);
-      const target = one(parsed, "target");
-      if (target === undefined) {
-        throw new UsageError("install requires --target");
-      }
-      return {
-        name: "install",
-        global,
-        packagePath: packagePath(parsed.positionals, "install"),
-        target,
-        apply: parsed.flags.has("apply"),
-      };
-    }
-    case "approve": {
-      rejectOptions(parsed, ["output", "statement"], []);
-      const statement = one(parsed, "statement");
-      if (statement === undefined || !statement.trim()) {
-        throw new UsageError("approve requires a non-empty --statement");
-      }
-      const output = one(parsed, "output");
-      return {
-        name: "approve",
-        global,
-        packagePath: packagePath(parsed.positionals, "approve"),
-        statement,
         ...(output === undefined ? {} : { output }),
       };
     }

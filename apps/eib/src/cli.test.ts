@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 const tuiRenderState = vi.hoisted(() => ({ cancel: false }));
@@ -55,10 +54,6 @@ const services: CliServices = {
     });
   },
 };
-
-function hash(content: string): string {
-  return createHash("sha256").update(content, "utf8").digest("hex");
-}
 
 describe("runCli", () => {
   it("emits one JSON document for machine-readable commands", async () => {
@@ -180,58 +175,4 @@ describe("runCli", () => {
     expect(output.stderr()).toBe("");
   });
 
-  it("renders the exact install plan during a non-JSON dry run", async () => {
-    const output = capture();
-    const content = "new instruction\n";
-    const target = "/project/.codex";
-    const dryRunServices: CliServices = {
-      listTargets: () => [],
-      execute() {
-        return Promise.resolve({
-          status: "ok",
-          message: "Dry-run complete. Review the actions; rerun with --apply to write them.",
-          data: {
-            applied: false,
-            plan: {
-              version: 1,
-              packageId: "review-me",
-              target,
-              manifestPath: `${target}/.eib-install-manifest.json`,
-              manifestHash: null,
-              backupDirectory: `${target}/.eib-backups/review`,
-              actions: [
-                {
-                  kind: "create",
-                  relativePath: "AGENTS.md",
-                  destination: `${target}/AGENTS.md`,
-                  targetId: "codex",
-                  content,
-                  contentHash: hash(content),
-                  observedHash: null,
-                  observedContent: null,
-                  ownedBefore: false,
-                  reason: "Destination does not exist.",
-                },
-              ],
-              protectedTargets: [],
-              createdAt: "2026-07-24T12:00:00.000Z",
-            },
-          },
-          exitCode: ExitCode.success,
-        });
-      },
-    };
-
-    const exitCode = await runCli(
-      ["install", "/package", "--target", target],
-      output.io,
-      dryRunServices,
-    );
-    expect(exitCode).toBe(ExitCode.success);
-    expect(output.stdout()).toContain(`[CREATE] ${target}/AGENTS.md`);
-    expect(output.stdout()).toContain("Destination does not exist.");
-    expect(output.stdout()).toContain(`Requested SHA-256: ${hash(content)}`);
-    expect(output.stdout()).toContain("+new instruction");
-    expect(output.stdout()).toContain('Exact requested content (utf8 JSON): "new instruction\\n"');
-  });
 });

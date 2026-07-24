@@ -75,7 +75,7 @@ describe("NewWizard", () => {
 
     submitField("Review support tickets");
     await waitForRender();
-    expect(ui.lastFrame()).toContain("Select the exact model/surface target");
+    expect(ui.lastFrame()).toContain("Select the model you will use this prompt with");
 
     await waitForInput();
     ui.stdin.write("\r");
@@ -155,7 +155,7 @@ describe("NewWizard", () => {
     ui.stdin.write("\r");
     await waitForRender();
     await waitForRender();
-    expect(ui.lastFrame()).toContain("Could not create the package: disk full");
+    expect(ui.lastFrame()).toContain("Could not create the prompt package: disk full");
 
     await waitForInput();
     ui.stdin.write("q");

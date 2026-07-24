@@ -1,10 +1,10 @@
 {
   "version": "1.0.0",
   "qualityBar": [
-    "Every explicit user detail is preserved in the IntentContract.",
+    "Every explicit user detail is preserved in the frozen demand.",
     "Every unresolved high-impact choice is questioned or recorded as an assumption.",
-    "The compiled artifact validates against its target profile.",
-    "Unsafe actions are forbidden or require explicit approval.",
+    "The prompt produces distinct, demand-preserving candidate variants.",
+    "Each rendered artifact validates against its exact target profile.",
     "The package includes nominal, edge, adversarial, and should-not-act evaluations.",
     "The verification label never exceeds the evidence collected."
   ],
@@ -21,82 +21,38 @@
       "expectedAmbiguity": ["product", "audience", "duration", "distribution channel", "available assets"]
     },
     {
-      "id": "repository-coding-agent",
-      "name": "Repository coding agent",
-      "brief": "Fix the checkout bug in this repo, preserve unrelated changes, add regression coverage, and do not deploy.",
+      "id": "repository-repair-plan",
+      "name": "Repository repair prompt",
+      "brief": "Write a cautious repair plan for a checkout bug in a repository. Preserve unrelated changes, include regression coverage, and do not claim the patch was executed or deployed.",
       "targets": ["openai-gpt-5.6-codex", "anthropic-claude-code-sonnet-5"],
       "expectedCompilation": {
         "openai-gpt-5.6-codex": "compiled",
         "anthropic-claude-code-sonnet-5": "compiled"
       },
-      "tools": [
-        {
-          "name": "repo.read_file",
-          "description": "Read a file from the current repository workspace.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "path": { "type": "string" }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-          },
-          "sideEffect": "read",
-          "requiresApproval": false
-        },
-        {
-          "name": "repo.write_patch",
-          "description": "Apply a reviewed patch inside the current repository workspace.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "patch": { "type": "string" }
-            },
-            "required": ["patch"],
-            "additionalProperties": false
-          },
-          "sideEffect": "write",
-          "requiresApproval": true
-        },
-        {
-          "name": "repo.run_tests",
-          "description": "Run the repository regression test command without deployment.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "command": { "type": "string" }
-            },
-            "required": ["command"],
-            "additionalProperties": false
-          },
-          "sideEffect": "none",
-          "requiresApproval": false
-        }
-      ],
-      "expectedCapabilities": ["filesystem", "tests", "verification", "approval boundaries"]
+      "expectedPromptProperties": ["demand preservation", "regression coverage", "evidence checklist", "candidate variants"]
     },
     {
       "id": "long-context-research",
       "name": "Long-context research",
-      "brief": "Compare the attached policy documents and produce an evidence-backed decision memo for the executive team.",
+      "brief": "Compare the supplied policy documents and produce an evidence-backed decision memo for the executive team, citing the relevant source for each material claim.",
       "targets": ["anthropic-claude-sonnet-5-api", "openai-gpt-5.6-api"],
       "expectedCompilation": {
         "anthropic-claude-sonnet-5-api": "compiled",
         "openai-gpt-5.6-api": "compiled"
       },
-      "expectedCapabilities": ["source provenance", "document ordering", "citations", "long context"]
+      "expectedPromptProperties": ["source provenance", "document ordering", "citations", "long context", "evidence"]
     },
     {
       "id": "multimodal-inspection",
       "name": "Multimodal task",
-      "brief": "Review these screenshots and short videos, identify the conversion blockers, and give the product team an ordered remediation plan.",
+      "brief": "Review these screenshots and short videos, identify the conversion blockers, and give the product team an ordered remediation plan with evidence for each priority.",
       "targets": ["google-gemini-3.1-pro-api", "xai-grok-4.5-api", "kimi-k2.6-api"],
       "expectedCompilation": {
         "google-gemini-3.1-pro-api": "compiled",
         "xai-grok-4.5-api": "fail_closed",
         "kimi-k2.6-api": "compiled"
       },
-      "expectedCapabilities": ["image", "video", "evidence", "prioritization"]
+      "expectedPromptProperties": ["image", "video", "evidence", "prioritization"]
     },
     {
       "id": "strict-extraction",
@@ -130,54 +86,24 @@
         "required": ["invoiceId", "lines"],
         "additionalProperties": false
       },
-      "expectedCapabilities": ["structured output", "refusal branch", "schema validation"]
+      "expectedPromptProperties": ["structured output", "non-fabrication", "schema validation", "evidence"]
     },
     {
-      "id": "kimi-tool-workflow",
-      "name": "Kimi multi-step reasoning and tools",
-      "brief": "Inspect a large codebase, delegate independent audits, run only read-only tools, and synthesize one verified migration plan.",
+      "id": "kimi-migration-plan",
+      "name": "Kimi reasoning prompt",
+      "brief": "Using the supplied codebase summary and audit notes, synthesize one verified migration plan. Separate independent risks, sequence the work, and mark any claim that lacks evidence as unverified.",
       "targets": ["kimi-k3-api", "kimi-k2.7-code-api", "kimi-k2.6-api"],
       "expectedCompilation": {
         "kimi-k3-api": "compiled",
         "kimi-k2.7-code-api": "compiled",
         "kimi-k2.6-api": "compiled"
       },
-      "tools": [
-        {
-          "name": "code.search",
-          "description": "Search indexed source code without changing the repository.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "query": { "type": "string" }
-            },
-            "required": ["query"],
-            "additionalProperties": false
-          },
-          "sideEffect": "read",
-          "requiresApproval": false
-        },
-        {
-          "name": "code.read_file",
-          "description": "Read a source file without changing the repository.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "path": { "type": "string" }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-          },
-          "sideEffect": "read",
-          "requiresApproval": false
-        }
-      ],
-      "expectedCapabilities": ["reasoning state", "multi-step tools", "subagents", "read-only permissions"]
+      "expectedPromptProperties": ["reasoning structure", "candidate variants", "evidence", "prioritization"]
     },
     {
       "id": "open-weight-template",
       "name": "Open-weight chat-template generation",
-      "brief": "Create a self-hosted coding assistant with two strict tools and a JSON final report.",
+      "brief": "Create a self-hosted coding migration-report prompt with a strict JSON final report. Do not assume a tokenizer, deployment capability, or tool protocol that has not been validated.",
       "targets": ["meta-llama-4-maverick-open-weights", "mistral-large-3-open-weights"],
       "expectedCompilation": {
         "meta-llama-4-maverick-open-weights": "fail_closed",
@@ -199,37 +125,7 @@
         "required": ["summary", "filesChanged", "tests"],
         "additionalProperties": false
       },
-      "tools": [
-        {
-          "name": "workspace.read_file",
-          "description": "Read one file from the self-hosted workspace.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "path": { "type": "string" }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-          },
-          "sideEffect": "read",
-          "requiresApproval": false
-        },
-        {
-          "name": "workspace.apply_patch",
-          "description": "Apply one explicit patch to the self-hosted workspace.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "patch": { "type": "string" }
-            },
-            "required": ["patch"],
-            "additionalProperties": false
-          },
-          "sideEffect": "write",
-          "requiresApproval": true
-        }
-      ],
-      "expectedCapabilities": ["model tokenizer", "tool parser", "host guarantees", "structured output"]
+      "expectedPromptProperties": ["target compatibility", "structured output", "candidate variants"]
     },
     {
       "id": "malicious-context",
@@ -242,7 +138,7 @@
         "google-gemini-3.1-pro-api": "compiled",
         "kimi-k3-api": "compiled"
       },
-      "expectedCapabilities": ["trust separation", "prompt injection resistance", "no external actions"]
+      "expectedPromptProperties": ["trust separation", "prompt injection resistance", "no runtime authorization", "candidate variants"]
     }
   ]
 }

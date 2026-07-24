@@ -61,16 +61,6 @@ export const IntentContractSchema = z.object({
 });
 export type IntentContract = z.infer<typeof IntentContractSchema>;
 
-export const ToolSpecSchema = z.object({
-  name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]*$/),
-  description: z.string().min(12),
-  inputSchema: JsonSchemaSchema.refine((schema) => schema["type"] === "object", {
-    message: "Tool input schemas must have an object root.",
-  }),
-  sideEffect: z.enum(["none", "read", "write", "external"]),
-  requiresApproval: z.boolean(),
-});
-
 export const TypedInputSchema = z.object({
   name: z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]*$/),
   description: z.string().min(1),
@@ -79,140 +69,35 @@ export const TypedInputSchema = z.object({
   provenance: z.enum(["user", "project", "retrieved", "tool"]),
 });
 
-const McpIdentifierSchema = z.string().regex(/^[a-zA-Z][a-zA-Z0-9_.-]*$/);
-
 /**
- * Declarative MCP configuration only. EIB persists this contract but never
- * launches a server, resolves an endpoint, or forwards credentials from it.
+ * The durable, provider-neutral description of a prompt to be optimized.
  *
- * `stdio` endpoints are executable names, not shell snippets. A future
- * runtime must invoke them without a shell and supply any arguments through a
- * separately reviewed execution contract. `http` endpoints are HTTPS URLs
- * without embedded credentials or fragments.
+ * It intentionally describes what the human wants and how the answer should
+ * be shaped. It is not an agent manifest: it contains no tools, permissions,
+ * servers, memory, budgets, or action workflow. Those concepts belong to a
+ * runtime, not to a paste-ready prompt.
  */
-const McpStdioServerSpecSchema = z.object({
-  name: McpIdentifierSchema,
-  transport: z.literal("stdio"),
-  endpoint: McpIdentifierSchema,
-  allowedTools: z.array(McpIdentifierSchema).min(1).superRefine((tools, context) => {
-    if (new Set(tools).size !== tools.length) {
-      context.addIssue({ code: "custom", message: "MCP allowedTools must not contain duplicates." });
-    }
-  }),
-  trust: z.enum(["trusted", "untrusted"]),
-  requiresApproval: z.boolean(),
-}).strict();
-
-const McpHttpServerSpecSchema = z.object({
-  name: McpIdentifierSchema,
-  transport: z.literal("http"),
-  endpoint: z.url().superRefine((value, context) => {
-    const url = new URL(value);
-    if (url.protocol !== "https:") {
-      context.addIssue({ code: "custom", message: "HTTP MCP endpoints must use HTTPS." });
-    }
-    if (url.username || url.password) {
-      context.addIssue({
-        code: "custom",
-        message: "HTTP MCP endpoints must not include credentials; configure credentials in the target runtime.",
-      });
-    }
-    if (url.hash) {
-      context.addIssue({ code: "custom", message: "HTTP MCP endpoints must not include a fragment." });
-    }
-  }),
-  allowedTools: z.array(McpIdentifierSchema).min(1).superRefine((tools, context) => {
-    if (new Set(tools).size !== tools.length) {
-      context.addIssue({ code: "custom", message: "MCP allowedTools must not contain duplicates." });
-    }
-  }),
-  trust: z.enum(["trusted", "untrusted"]),
-  requiresApproval: z.boolean(),
-}).strict();
-
-export const McpServerSpecSchema = z
-  .discriminatedUnion("transport", [McpStdioServerSpecSchema, McpHttpServerSpecSchema])
-  .superRefine((server, context) => {
-    if (server.trust === "untrusted" && !server.requiresApproval) {
-      context.addIssue({
-        code: "custom",
-        message: "Untrusted MCP servers must require approval before use.",
-      });
-    }
-  });
-export type McpServerSpec = z.infer<typeof McpServerSpecSchema>;
-
-export const McpServerSpecsSchema = z.array(McpServerSpecSchema).superRefine((servers, context) => {
-  const names = new Set<string>();
-  for (const [index, server] of servers.entries()) {
-    if (names.has(server.name)) {
-      context.addIssue({
-        code: "custom",
-        path: [index, "name"],
-        message: `MCP server name ${JSON.stringify(server.name)} must be unique.`,
-      });
-    }
-    names.add(server.name);
-  }
-});
-
-export const AgentBlueprintSchema = z.object({
+export const PromptSpecSchema = z.object({
   version: ContractVersionSchema,
   id: z.string().min(1),
-  intent: IntentContractSchema,
-  roles: z.object({
-    identity: z.string().min(1),
-    policy: z.array(z.string().min(1)),
+  demand: IntentContractSchema,
+  guidance: z.object({
+    role: z.string().min(1),
+    principles: z.array(z.string().min(1)).min(1),
+    method: z.array(z.string().min(1)).min(1),
   }),
-  workflow: z.array(
-    z.object({
-      id: z.string().min(1),
-      instruction: z.string().min(1),
-      dependsOn: z.array(z.string()).default([]),
-      verification: z.string().min(1),
-    }),
-  ).min(1),
-  subagents: z.array(
-    z.object({
-      name: z.string().min(1),
-      purpose: z.string().min(1),
-      allowedTools: z.array(z.string()),
-      completionContract: z.string().min(1),
-    }),
-  ).default([]),
-  tools: z.array(ToolSpecSchema).default([]),
-  mcpServers: McpServerSpecsSchema.default([]),
-  typedInputs: z.array(TypedInputSchema).default([]),
-  memory: z.object({
-    enabled: z.boolean(),
-    scope: z.enum(["none", "task", "project", "user"]),
-    retention: z.string().min(1),
-    writePolicy: z.string().min(1),
-  }),
-  permissions: z.object({
-    filesystem: z.enum(["none", "read_only", "workspace_write"]),
-    network: z.enum(["none", "read_only", "full"]),
-    externalActions: z.enum(["forbidden", "approval_required"]),
-  }),
-  approvals: z.object({
-    requiredFor: z.array(z.enum(["filesystem_write", "network_write", "external_action"])),
-    approver: z.literal("human"),
-    recordPolicy: z.string().min(1),
-  }),
-  budgets: z.object({
-    maxTurns: z.number().int().positive(),
-    maxMinutes: z.number().int().positive(),
-    tokenGuidance: z.number().int().positive(),
-  }),
-  verification: z.object({
+  inputBindings: z.array(TypedInputSchema).default([]),
+  evaluation: z.object({
     criteria: z.array(z.string().min(1)).min(1),
     evidencePolicy: z.string().min(1),
-    independentReview: z.boolean(),
+    candidateDimensions: z.array(z.enum([
+      "baseline",
+      "verification_emphasis",
+      "reasoning_structure",
+    ])).min(1),
   }),
-  stoppingRules: z.array(z.string().min(1)).min(1),
-  failureHandling: z.array(z.string().min(1)).min(1),
 });
-export type AgentBlueprint = z.infer<typeof AgentBlueprintSchema>;
+export type PromptSpec = z.infer<typeof PromptSpecSchema>;
 
 export const TargetProfileSchema = z.object({
   id: z.string().min(1),
@@ -353,23 +238,6 @@ export const EvalResultSchema = z.object({
   provenance: ExternalEvaluationProvenanceSchema.optional(),
 });
 
-/**
- * A human's explicit review of a concrete package revision. The hash is of
- * the package immediately before this record was appended, so later edits do
- * not silently change what the person approved.
- */
-export const HumanApprovalRecordSchema = z.object({
-  id: z.string().uuid(),
-  approvedAt: z.iso.datetime(),
-  approver: z.literal("human"),
-  statement: z.string().trim().min(1).max(4_000),
-  approvedPackageHash: z.string().regex(/^[a-f0-9]{64}$/),
-  approvalRequirements: z.array(
-    z.enum(["filesystem_write", "network_write", "external_action"]),
-  ),
-});
-export type HumanApprovalRecord = z.infer<typeof HumanApprovalRecordSchema>;
-
 export const PromptPackageSchema = z.object({
   version: ContractVersionSchema,
   id: z.string().min(1),
@@ -382,7 +250,7 @@ export const PromptPackageSchema = z.object({
       assumed: z.boolean(),
     }),
   ),
-  blueprint: AgentBlueprintSchema,
+  prompt: PromptSpecSchema,
   artifacts: z.array(CompiledArtifactSchema),
   warnings: z.array(z.string()),
   evals: z.array(EvalCaseSchema),
@@ -393,6 +261,5 @@ export const PromptPackageSchema = z.object({
     sourceVersions: z.record(z.string(), z.string().min(1)).default({}),
   }),
   verification: VerificationStatusSchema,
-  approvalRecords: z.array(HumanApprovalRecordSchema).default([]),
 });
 export type PromptPackage = z.infer<typeof PromptPackageSchema>;

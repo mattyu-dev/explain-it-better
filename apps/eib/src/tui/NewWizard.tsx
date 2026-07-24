@@ -126,12 +126,12 @@ export function NewWizard({ services, signal, onCancel, onBack }: NewWizardProps
   if (brief === undefined) {
     return (
       <Box flexDirection="column">
-        <Text bold>Create a verified prompt package</Text>
+        <Text bold>Turn a demand into a better prompt</Text>
         <Text dimColor>Describe the outcome in your own words. Explicit details are preserved.</Text>
         <Box marginTop={1}>
           <TextField
             label="Brief:"
-            placeholder="What should the agent achieve?"
+            placeholder="What do you want the prompt to achieve?"
             onCancel={onCancel}
             onSubmit={(value) => {
               if (value.length > 0) setBrief(value);
@@ -146,7 +146,7 @@ export function NewWizard({ services, signal, onCancel, onBack }: NewWizardProps
   if (!targetSelected) {
     return (
       <Box flexDirection="column">
-        <Text bold>Select the exact model/surface target</Text>
+        <Text bold>Select the model you will use this prompt with</Text>
         <Text dimColor>↑/↓ select · Enter continue · Esc edit brief</Text>
         <Box marginTop={1} flexDirection="column">
           {targets.map((target, index) => (
@@ -203,13 +203,13 @@ export function NewWizard({ services, signal, onCancel, onBack }: NewWizardProps
   }
 
   if (running) {
-    return <Text color="cyan">Compiling the frozen intent…</Text>;
+    return <Text color="cyan">Shaping the prompt…</Text>;
   }
 
   if (error !== undefined) {
     return (
       <Box flexDirection="column">
-        <Text color="red">Could not create the package: {error}</Text>
+        <Text color="red">Could not create the prompt package: {error}</Text>
         <Text dimColor>Press Esc to return.</Text>
       </Box>
     );

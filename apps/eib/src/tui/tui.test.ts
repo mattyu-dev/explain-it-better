@@ -104,6 +104,6 @@ describe("App", () => {
 
     ui.stdin.write("q");
     await waitForRender();
-    expect(ui.lastFrame()).toContain("New prompt package");
+    expect(ui.lastFrame()).toContain("Shape a new prompt");
   });
 });

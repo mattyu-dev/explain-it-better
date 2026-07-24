@@ -31,7 +31,8 @@ not an `npm publish` operation. Every workspace has `private: true` as a guard.
 - Verify the tag resolves to the merged commit and the GitHub Release is
   private to repository members.
 - Record any known limitations in the release notes. Do not describe proxy or
-  static evaluation as target-model validation.
+  static evaluation as target-model validation, and do not describe a
+  best-tested prompt as universally perfect.
 - Do not publish to npm. If public or registry distribution is ever approved,
   first change the package privacy policy, add provenance/registry controls,
   and review the release process separately.

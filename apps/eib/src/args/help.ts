@@ -1,15 +1,12 @@
 const commandHelp: Readonly<Record<string, string>> = {
   new: `Usage: eib new [brief] [options]
 
-Turn a brief into an intent contract and agent blueprint.
+Turn a human demand into a target-aware prompt package.
 
 Options:
   --brief <text>          Brief (alternative to positional text)
   --target <id>           Compile a target; repeat for multiple targets
   --schema <JSON object>  Structured output schema
-  --tools <JSON array>    Canonical tool specifications
-  --mcp-servers <JSON array>
-                         Declarative MCP server specs; EIB never starts them
   --fast                  Accept visible recommended assumptions
   --output <path>         Write the package to this path
   --json                  Emit one machine-readable JSON document`,
@@ -22,12 +19,13 @@ Options:
   --json                  Emit one machine-readable JSON document`,
   optimize: `Usage: eib optimize [package] [options]
 
-Generate one to three frozen-intent candidates and a held-out evaluation plan.
+Generate one to three demand-preserving prompt candidates and a held-out evaluation plan.
 With --runs, make a fail-closed promotion recommendation from imported evidence.
 The source package and its verification status are never changed.
 
 Options:
   --max-candidates 1|2|3     Candidate count (default: 3)
+  --target <id>              Exact target to test; required when the package has several
   --runs <json-file>         Candidate evaluation runs for every generated candidate
   --comparisons <json-file>  Optional blinded comparisons; both orders required per case
   --minimum-improvement <n>  Strict score delta needed to promote (default: 0)
@@ -47,24 +45,16 @@ The package defaults to .eib/package.json.
 
 Options:
   --mode static|proxy|live
-  --depth quick|default|deep  Repetitions for proxy/live modes
-  --backend codex|claude  Required for proxy mode
+  --depth quick|default|deep  Repetitions for proxy/live model evaluation
+  --backend codex|claude  Required evaluator for proxy mode
   --fixtures <json-file>  Static outputs keyed by every evaluation case ID
-  --allow-execution       Explicit consent required for proxy mode
+  --allow-execution       Explicit consent required before a proxy model run
   --json                  Emit one machine-readable JSON document`,
   export: `Usage: eib export [package] --format directory|clipboard [options]
 
 Options:
   --output <directory>    Required for directory export
   --json                  Emit one machine-readable JSON document`,
-  install: `Usage: eib install [package] --target <path> [--apply]
-
-Install is a dry-run by default. --apply writes only the reviewed plan.
-The package defaults to .eib/package.json.`,
-  approve: `Usage: eib approve [package] --statement <text> [--output <directory>]
-
-Record an explicit human approval against the exact current package revision.
-The package defaults to .eib/package.json.`,
   preferences: `Usage: eib preferences show|set|unset [options]
 
 Options:
@@ -85,20 +75,18 @@ export function renderHelp(topic?: string): string {
   if (topic !== undefined && commandHelp[topic] !== undefined) {
     return commandHelp[topic];
   }
-  return `Explain It Better — verified intent-to-agent compiler
+  return `Explain It Better — demand-to-best-tested-prompt optimizer
 
 Usage:
   eib                              Open the interactive terminal UI
-  eib new [brief] [options]        Create an intent contract and package
-  eib improve <package>            Improve from feedback and regression evidence
-  eib optimize [package]           Generate candidates and gate a tested promotion
-  eib compile [package] --target   Compile exact model/surface artifacts
-  eib eval [package]               Evaluate statically or with explicit consent
-  eib export [package]             Export a portable package
-  eib install [package]            Preview or apply a reviewed installation
-  eib approve [package]            Record an auditable human approval
+  eib new [demand] [options]       Turn a demand into a prompt package
+  eib improve <package>            Revise a prompt from feedback
+  eib optimize [package]           Compare candidates and gate a best-tested prompt
+  eib compile [package] --target   Adapt the prompt for an exact model/surface
+  eib eval [package]               Validate a prompt statically or with consent
+  eib export [package]             Export a paste-ready prompt package
   eib preferences show|set|unset   Manage credential-free CLI defaults
-  eib doctor                       Inspect safe local backend readiness
+  eib doctor                       Inspect local evaluator readiness
   eib knowledge check|stage        Review official-source drift
 
 Global options:

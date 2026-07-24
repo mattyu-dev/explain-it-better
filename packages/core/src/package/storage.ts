@@ -18,7 +18,7 @@ import {
 const PACKAGE_FILENAME = "prompt-package.json";
 const MANIFEST_FILENAME = ".eib-package-manifest.json";
 
-type Provenance = PromptPackage["blueprint"]["intent"]["context"][number];
+type Provenance = PromptPackage["prompt"]["demand"]["context"][number];
 
 interface PackageFileManifest {
   readonly version: 1;
@@ -112,13 +112,12 @@ function verificationReport(promptPackage: PromptPackage): string {
     `- Package version: \`${promptPackage.version}\``,
     `- Knowledge pack: \`${markdownEscape(promptPackage.knowledge.packVersion)}\``,
     `- Evaluation results: ${promptPackage.results.length} (${passed} passed, ${failed} failed)`,
-    `- Human approval records: ${promptPackage.approvalRecords.length}`,
     "",
     "## Warnings",
     "",
     warnings,
     "",
-    "This report records evidence level; it does not claim universal prompt optimality.",
+    "This report records the evidence behind this prompt; it does not claim universal prompt optimality.",
     "",
   ].join("\n");
 }
@@ -154,7 +153,7 @@ function provenance(promptPackage: PromptPackage): {
   return {
     packageId: promptPackage.id,
     createdAt: promptPackage.createdAt,
-    sources: promptPackage.blueprint.intent.context,
+    sources: promptPackage.prompt.demand.context,
     knowledge: promptPackage.knowledge,
   };
 }
@@ -163,20 +162,15 @@ function buildPortableFiles(promptPackage: PromptPackage): ReadonlyMap<string, s
   const parsed = PromptPackageSchema.parse(promptPackage);
   const files = new Map<string, string>([
     [PACKAGE_FILENAME, json(parsed)],
-    ["blueprint.json", json(parsed.blueprint)],
+    ["prompt.json", json(parsed.prompt)],
     ["original-brief.md", originalBrief(parsed)],
     ["evals.jsonl", parsed.evals.map((evalCase) => JSON.stringify(evalCase)).join("\n") + "\n"],
     ["provenance.json", json(provenance(parsed))],
     ["verification-report.md", verificationReport(parsed)],
-    ["tools.json", json(parsed.blueprint.tools)],
-    ["mcp-servers.json", json(parsed.blueprint.mcpServers)],
-    ["typed-inputs.json", json(parsed.blueprint.typedInputs)],
-    ["approval-policy.json", json(parsed.blueprint.approvals)],
-    ["approval-records.json", json(parsed.approvalRecords)],
-    ["subagents.json", json(parsed.blueprint.subagents)],
+    ["input-bindings.json", json(parsed.prompt.inputBindings)],
   ]);
-  if (parsed.blueprint.intent.outputContract.schema !== undefined) {
-    files.set("output-schema.json", json(parsed.blueprint.intent.outputContract.schema));
+  if (parsed.prompt.demand.outputContract.schema !== undefined) {
+    files.set("output-schema.json", json(parsed.prompt.demand.outputContract.schema));
   }
 
   for (const artifact of parsed.artifacts) {

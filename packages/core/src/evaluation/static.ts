@@ -510,7 +510,7 @@ function validatePackageStructure(promptPackage: PromptPackage): StaticFinding[]
     (evalCase) => evalCase.category === "output_schema",
   );
   if (
-    promptPackage.blueprint.intent.outputContract.format.trim().toLowerCase() === "json" &&
+    promptPackage.prompt.demand.outputContract.format.trim().toLowerCase() === "json" &&
     outputShapeCase !== undefined &&
     !outputShapeCase.deterministicChecks.includes("valid_json")
   ) {
@@ -560,7 +560,7 @@ export function evaluateStatic(
           evalCase,
           output,
           targetId,
-          validatedPackage.blueprint.intent.outputContract.schema,
+          validatedPackage.prompt.demand.outputContract.schema,
         ),
       );
     }

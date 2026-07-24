@@ -27,10 +27,10 @@ describe("portable package persistence", () => {
     const destination = join(root, "export");
     const promptPackage = makePromptPackage();
     const written = await writePromptPackage(promptPackage, destination);
-    expect(written.files).toContain("blueprint.json");
+    expect(written.files).toContain("prompt.json");
     expect(written.files).toContain("evals.jsonl");
     expect(written.files).toContain("provenance.json");
-    expect(written.files).toContain("mcp-servers.json");
+    expect(written.files).toContain("input-bindings.json");
     expect(written.files).toContain("verification-report.md");
     expect(written.files).toContain("artifacts/openai-gpt/prompt.md");
     await expect(readPromptPackage(destination)).resolves.toEqual(promptPackage);
@@ -50,7 +50,7 @@ describe("portable package persistence", () => {
 
     const managed = join(root, "managed");
     await writePromptPackage(makePromptPackage(), managed);
-    await writeFile(join(managed, "blueprint.json"), "user edit");
+    await writeFile(join(managed, "prompt.json"), "user edit");
     await expect(writePromptPackage(makePromptPackage(), managed)).rejects.toThrow(
       "modified package files",
     );

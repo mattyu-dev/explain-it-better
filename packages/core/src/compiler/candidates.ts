@@ -1,15 +1,18 @@
-import type { AgentBlueprint } from "../contracts.js";
+import { createHash } from "node:crypto";
+
+import type { PromptSpec } from "../contracts.js";
 
 export type CandidateDimension =
   | "baseline"
   | "verification_emphasis"
-  | "workflow_emphasis";
+  | "reasoning_structure";
 
 export interface PromptCandidate {
   id: string;
   dimension: CandidateDimension;
-  blueprintId: string;
+  promptSpecId: string;
   semanticPrompt: string;
+  promptHash: string;
   changeLog: string[];
 }
 
@@ -21,8 +24,8 @@ function section(title: string, values: readonly string[]): string {
   return [`## ${title}`, ...values.map((value) => `- ${value}`)].join("\n");
 }
 
-function outputContract(blueprint: AgentBlueprint): string {
-  const { outputContract: contract } = blueprint.intent;
+function outputContract(prompt: PromptSpec): string {
+  const { outputContract: contract } = prompt.demand;
   const schema = contract.schema;
   return [
     "## Output contract",
@@ -40,34 +43,34 @@ function outputContract(blueprint: AgentBlueprint): string {
   ].join("\n");
 }
 
-function baselinePrompt(blueprint: AgentBlueprint): string {
-  const { intent } = blueprint;
+function baselinePrompt(prompt: PromptSpec): string {
+  const { demand } = prompt;
   return [
-    `# Mission\n${intent.objective}`,
-    `## Why this matters\n${intent.motivation}`,
-    section("Deliverables", intent.deliverables),
-    section("Audience", intent.audience),
-    section("Hard constraints", intent.constraints.length > 0 ? intent.constraints : ["None specified."]),
+    `# Task\n${demand.objective}`,
+    `## Why this matters\n${demand.motivation}`,
+    section("Deliverables", demand.deliverables),
+    section("Audience", demand.audience),
+    section("Hard constraints", demand.constraints.length > 0 ? demand.constraints : ["None specified."]),
     section(
       "Preferences",
-      intent.preferences.length > 0 ? intent.preferences : ["No additional preferences specified."],
+      demand.preferences.length > 0 ? demand.preferences : ["No additional preferences specified."],
     ),
-    section("Exclusions", intent.exclusions.length > 0 ? intent.exclusions : ["None specified."]),
+    section("Exclusions", demand.exclusions.length > 0 ? demand.exclusions : ["None specified."]),
     section(
       "Visible assumptions",
-      intent.assumptions.length > 0 ? intent.assumptions : ["Do not add unstated assumptions."],
+      demand.assumptions.length > 0 ? demand.assumptions : ["Do not add unstated assumptions."],
     ),
-    section("Success criteria", intent.successCriteria),
+    section("Success criteria", demand.successCriteria),
     section(
       "Evidence requirements",
-      intent.evidenceRequirements.length > 0
-        ? intent.evidenceRequirements
+      demand.evidenceRequirements.length > 0
+        ? demand.evidenceRequirements
         : ["Use evidence appropriate to the task; do not invent facts."],
     ),
     section(
       "Typed inputs",
-      blueprint.typedInputs.length > 0
-        ? blueprint.typedInputs.map(
+      prompt.inputBindings.length > 0
+        ? prompt.inputBindings.map(
             (input) =>
               `${input.name} (${input.required ? "required" : "optional"}, ${input.provenance}): ${input.description}`,
           )
@@ -75,31 +78,24 @@ function baselinePrompt(blueprint: AgentBlueprint): string {
     ),
     section(
       "Context and provenance",
-      intent.context.length > 0
-        ? intent.context.map(
+      demand.context.length > 0
+        ? demand.context.map(
             (entry) => `${entry.source} [${entry.trust}]: ${entry.summary}`,
           )
         : ["No additional context supplied."],
     ),
-    outputContract(blueprint),
-    section("Operating policy", blueprint.roles.policy),
-    section(
-      "Approval boundary",
-      blueprint.approvals.requiredFor.length > 0
-        ? blueprint.approvals.requiredFor.map(
-            (boundary) => `${boundary}: obtain and record human approval before acting.`,
-          )
-        : ["Consequential external actions are forbidden."],
-    ),
-    "Execute the mission. Return the deliverable, material assumptions, evidence, and verification results. Do not reveal hidden chain-of-thought.",
+    outputContract(prompt),
+    `## Role\n${prompt.guidance.role}`,
+    section("Response principles", prompt.guidance.principles),
+    "Return the requested deliverable, material assumptions, and evidence where relevant. Do not narrate private reasoning.",
   ].join("\n\n");
 }
 
-function verificationVariant(base: string, blueprint: AgentBlueprint): string {
+function verificationVariant(base: string, prompt: PromptSpec): string {
   return [
     base,
     section("Verification protocol", [
-      ...blueprint.intent.successCriteria.map(
+      ...prompt.demand.successCriteria.map(
         (criterion) => `Check and report pass/fail evidence for: ${criterion}`,
       ),
       "Treat any violated hard constraint as a critical failure.",
@@ -108,15 +104,12 @@ function verificationVariant(base: string, blueprint: AgentBlueprint): string {
   ].join("\n\n");
 }
 
-function workflowVariant(base: string, blueprint: AgentBlueprint): string {
+function reasoningStructureVariant(base: string, prompt: PromptSpec): string {
   return [
     base,
     section(
-      "Execution workflow",
-      blueprint.workflow.map(
-        (step) =>
-          `${step.id}: ${step.instruction} Verification: ${step.verification}`,
-      ),
+      "Recommended approach",
+      prompt.guidance.method,
     ),
   ].join("\n\n");
 }
@@ -126,33 +119,23 @@ function workflowVariant(base: string, blueprint: AgentBlueprint): string {
  * exactly one documented prompting dimension while preserving frozen intent.
  */
 export function generatePromptCandidates(
-  blueprint: AgentBlueprint,
+  prompt: PromptSpec,
   options: GenerateCandidateOptions = {},
 ): PromptCandidate[] {
   const maximum = options.maxCandidates ?? 3;
-  const base = baselinePrompt(blueprint);
+  const base = baselinePrompt(prompt);
+  const candidate = (id: string, dimension: CandidateDimension, semanticPrompt: string, changeLog: string[]): PromptCandidate => ({
+    id,
+    dimension,
+    promptSpecId: prompt.id,
+    semanticPrompt,
+    promptHash: createHash("sha256").update(semanticPrompt).digest("hex"),
+    changeLog,
+  });
   const all: PromptCandidate[] = [
-    {
-      id: `${blueprint.id}-baseline`,
-      dimension: "baseline",
-      blueprintId: blueprint.id,
-      semanticPrompt: base,
-      changeLog: ["Canonical intent-preserving baseline."],
-    },
-    {
-      id: `${blueprint.id}-verification`,
-      dimension: "verification_emphasis",
-      blueprintId: blueprint.id,
-      semanticPrompt: verificationVariant(base, blueprint),
-      changeLog: ["Added an explicit criterion-by-criterion verification protocol."],
-    },
-    {
-      id: `${blueprint.id}-workflow`,
-      dimension: "workflow_emphasis",
-      blueprintId: blueprint.id,
-      semanticPrompt: workflowVariant(base, blueprint),
-      changeLog: ["Added the blueprint workflow as an explicit execution sequence."],
-    },
+    candidate(`${prompt.id}-baseline`, "baseline", base, ["Canonical demand-preserving baseline."]),
+    candidate(`${prompt.id}-verification`, "verification_emphasis", verificationVariant(base, prompt), ["Added an explicit criterion-by-criterion verification protocol."]),
+    candidate(`${prompt.id}-reasoning`, "reasoning_structure", reasoningStructureVariant(base, prompt), ["Added a concise answer-planning structure without requesting private reasoning."]),
   ];
   return all.slice(0, maximum);
 }

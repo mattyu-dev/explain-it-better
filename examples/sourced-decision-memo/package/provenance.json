@@ -1,24 +1,15 @@
 {
-  "packageId": "eib-000cc7d8-dd95-415d-8ca4-fddf1ce91e7b",
+  "packageId": "sourced-decision-memo",
   "createdAt": "2026-07-24T15:26:44.420Z",
-  "sources": [
-    {
-      "id": "original-brief",
-      "source": "user brief",
-      "trust": "user",
-      "summary": "Write a sourced decision memo for an engineering leader"
-    }
-  ],
+  "sources": [{
+    "id": "original-brief",
+    "source": "user brief",
+    "trust": "user",
+    "summary": "Write a sourced decision memo for an engineering leader."
+  }],
   "knowledge": {
-    "packVersion": "2026.07.24-v2",
-    "ruleIds": [
-      "openai-lean-nonduplicative-prompts",
-      "openai-explicit-approval-boundaries",
-      "openai-outcomes-not-hidden-reasoning",
-      "builtin.semantic-boundary"
-    ],
-    "sourceVersions": {
-      "openai-model-guidance": "c074d3d8b539b0f2068040a24df1f95022afd83ee88e2936c7806e8720edd5f0"
-    }
+    "packVersion": "2026.07.24",
+    "ruleIds": ["openai.instructions"],
+    "sourceVersions": {"openai-model-guidance": "reviewed-2026-07-24"}
   }
 }

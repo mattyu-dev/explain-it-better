@@ -26,10 +26,10 @@ export function makePromptPackage(): PromptPackage {
         assumed: false,
       },
     ],
-    blueprint: {
+    prompt: {
       version: "1.0.0",
-      id: "example-blueprint",
-      intent: {
+      id: "example-prompt",
+      demand: {
         version: "1.0.0",
         objective: "Create a concise, evidence-backed answer.",
         motivation: "Help a technical reader decide.",
@@ -59,22 +59,12 @@ export function makePromptPackage(): PromptPackage {
         risk: "low",
         unresolvedAmbiguity: [],
       },
-      roles: {
-        identity: "A careful assistant",
-        policy: ["Follow the frozen intent contract."],
+      guidance: {
+        role: "A careful assistant",
+        principles: ["Follow the frozen human demand."],
+        method: ["Address the request directly.", "Check the success criteria before replying."],
       },
-      workflow: [
-        {
-          id: "answer",
-          instruction: "Answer the request.",
-          dependsOn: [],
-          verification: "Check the success criteria.",
-        },
-      ],
-      subagents: [],
-      tools: [],
-      mcpServers: [],
-      typedInputs: [
+      inputBindings: [
         {
           name: "user_brief",
           description: "user brief",
@@ -83,34 +73,11 @@ export function makePromptPackage(): PromptPackage {
           provenance: "user",
         },
       ],
-      memory: {
-        enabled: false,
-        scope: "none",
-        retention: "No retention",
-        writePolicy: "Never write",
-      },
-      permissions: {
-        filesystem: "none",
-        network: "none",
-        externalActions: "forbidden",
-      },
-      approvals: {
-        requiredFor: [],
-        approver: "human",
-        recordPolicy: "Record every approved consequential action.",
-      },
-      budgets: {
-        maxTurns: 3,
-        maxMinutes: 5,
-        tokenGuidance: 2000,
-      },
-      verification: {
+      evaluation: {
         criteria: ["The answer addresses the brief."],
         evidencePolicy: "Cite supplied evidence.",
-        independentReview: false,
+        candidateDimensions: ["baseline", "verification_emphasis", "reasoning_structure"],
       },
-      stoppingRules: ["Stop when success criteria are verified."],
-      failureHandling: ["State missing evidence."],
     },
     artifacts: [
       {
@@ -139,6 +106,5 @@ export function makePromptPackage(): PromptPackage {
       },
     },
     verification: "compiled",
-    approvalRecords: [],
   };
 }
