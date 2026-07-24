@@ -1,0 +1,5 @@
+{
+  "requiredFor": [],
+  "approver": "human",
+  "recordPolicy": "Record the exact proposed action and the human approval that authorized it."
+}

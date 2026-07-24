@@ -1,0 +1,503 @@
+import { IntentContractSchema, McpServerSpecsSchema, ToolSpecSchema } from "@eib/core";
+import type {
+  CandidateCount,
+  CliCommand,
+  EvalMode,
+  GlobalOptions,
+} from "./types.js";
+import { UsageError } from "./types.js";
+
+interface ParsedTokens {
+  positionals: string[];
+  options: Map<string, string[]>;
+  flags: Set<string>;
+}
+
+const VALUE_OPTIONS = new Set([
+  "backend",
+  "brief",
+  "default-target",
+  "depth",
+  "feedback",
+  "fixtures",
+  "format",
+  "mode",
+  "mcp-servers",
+  "minimum-improvement",
+  "output",
+  "runs",
+  "comparisons",
+  "max-candidates",
+  "schema",
+  "statement",
+  "source",
+  "target",
+  "tools",
+]);
+
+const FLAG_OPTIONS = new Set([
+  "allow-execution",
+  "apply",
+  "fast",
+  "help",
+  "json",
+  "version",
+]);
+
+function tokenize(argv: readonly string[]): ParsedTokens {
+  const positionals: string[] = [];
+  const options = new Map<string, string[]>();
+  const flags = new Set<string>();
+  let positionalOnly = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === undefined) {
+      continue;
+    }
+    if (positionalOnly) {
+      positionals.push(token);
+      continue;
+    }
+    if (token === "--") {
+      positionalOnly = true;
+      continue;
+    }
+    if (token === "-h") {
+      flags.add("help");
+      continue;
+    }
+    if (!token.startsWith("--")) {
+      positionals.push(token);
+      continue;
+    }
+
+    const separator = token.indexOf("=");
+    const name = token.slice(2, separator === -1 ? undefined : separator);
+    if (FLAG_OPTIONS.has(name)) {
+      if (separator !== -1) {
+        throw new UsageError(`--${name} does not accept a value`);
+      }
+      flags.add(name);
+      continue;
+    }
+    if (!VALUE_OPTIONS.has(name)) {
+      throw new UsageError(`Unknown option: --${name}`);
+    }
+
+    const inlineValue = separator === -1 ? undefined : token.slice(separator + 1);
+    const value = inlineValue ?? argv[index + 1];
+    if (value === undefined || (inlineValue === undefined && value.startsWith("--"))) {
+      throw new UsageError(`--${name} requires a value`);
+    }
+    if (inlineValue === undefined) {
+      index += 1;
+    }
+    const values = options.get(name) ?? [];
+    values.push(value);
+    options.set(name, values);
+  }
+
+  return { positionals, options, flags };
+}
+
+function one(parsed: ParsedTokens, name: string): string | undefined {
+  const values = parsed.options.get(name);
+  if (values === undefined) {
+    return undefined;
+  }
+  if (values.length !== 1) {
+    throw new UsageError(`--${name} may only be specified once`);
+  }
+  return values[0];
+}
+
+function many(parsed: ParsedTokens, name: string): string[] {
+  return [...(parsed.options.get(name) ?? [])];
+}
+
+function parseJson(raw: string, option: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new UsageError(`--${option} must contain valid JSON: ${reason}`);
+  }
+}
+
+function parseCandidateCount(value: string | undefined): CandidateCount {
+  if (value === undefined) return 3;
+  if (value === "1" || value === "2" || value === "3") {
+    return Number(value) as CandidateCount;
+  }
+  throw new UsageError("--max-candidates must be 1, 2, or 3");
+}
+
+function parseNonNegativeNumber(value: string | undefined, option: string): number | undefined {
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  if (value.trim().length === 0 || !Number.isFinite(number) || number < 0) {
+    throw new UsageError(`--${option} must be a finite non-negative number`);
+  }
+  return number;
+}
+
+function parseOutputSchema(
+  parsed: ParsedTokens,
+): NonNullable<
+  Extract<CliCommand, { name: "new" }>["outputSchema"]
+> | undefined {
+  const raw = one(parsed, "schema");
+  if (raw === undefined) {
+    return undefined;
+  }
+  const result =
+    IntentContractSchema.shape.outputContract.shape.schema.safeParse(
+      parseJson(raw, "schema"),
+    );
+  if (!result.success || result.data === undefined) {
+    const reason = result.success
+      ? "the value must be a JSON object"
+      : result.error.issues[0]?.message ?? "the value does not match the output schema contract";
+    throw new UsageError(`--schema must be a JSON object: ${reason}`);
+  }
+  return result.data;
+}
+
+function parseTools(
+  parsed: ParsedTokens,
+): Extract<CliCommand, { name: "new" }>["tools"] | undefined {
+  const raw = one(parsed, "tools");
+  if (raw === undefined) {
+    return undefined;
+  }
+  const result = ToolSpecSchema.array().safeParse(parseJson(raw, "tools"));
+  if (!result.success) {
+    const reason =
+      result.error.issues[0]?.message ??
+      "the value does not match the canonical tool contract";
+    throw new UsageError(
+      `--tools must be a JSON array of valid tool specifications: ${reason}`,
+    );
+  }
+  return result.data;
+}
+
+function parseMcpServers(
+  parsed: ParsedTokens,
+): Extract<CliCommand, { name: "new" }>["mcpServers"] | undefined {
+  const raw = one(parsed, "mcp-servers");
+  if (raw === undefined) {
+    return undefined;
+  }
+  const result = McpServerSpecsSchema.safeParse(parseJson(raw, "mcp-servers"));
+  if (!result.success) {
+    const reason =
+      result.error.issues[0]?.message ??
+      "the value does not match the canonical MCP server contract";
+    throw new UsageError(
+      `--mcp-servers must be a JSON array of declarative, valid MCP server specifications: ${reason}`,
+    );
+  }
+  return result.data;
+}
+
+function rejectOptions(
+  parsed: ParsedTokens,
+  allowedValues: readonly string[],
+  allowedFlags: readonly string[],
+): void {
+  const allowedValueSet = new Set(allowedValues);
+  const allowedFlagSet = new Set(["help", "json", ...allowedFlags]);
+  for (const name of parsed.options.keys()) {
+    if (!allowedValueSet.has(name)) {
+      throw new UsageError(`--${name} is not valid for this command`);
+    }
+  }
+  for (const name of parsed.flags) {
+    if (!allowedFlagSet.has(name)) {
+      throw new UsageError(`--${name} is not valid for this command`);
+    }
+  }
+}
+
+function packagePath(positionals: string[], command: string): string {
+  if (positionals.length > 1) {
+    throw new UsageError(`${command} accepts at most one package path`);
+  }
+  return positionals[0] ?? ".eib/package.json";
+}
+
+export function parseArgs(argv: readonly string[]): CliCommand {
+  const parsed = tokenize(argv);
+  const global: GlobalOptions = { json: parsed.flags.has("json") };
+  const commandName = parsed.positionals.shift();
+
+  if (parsed.flags.has("version")) {
+    if (commandName !== undefined) {
+      throw new UsageError("--version cannot be combined with a command");
+    }
+    rejectOptions(parsed, [], ["version"]);
+    return { name: "version", global };
+  }
+
+  if (parsed.flags.has("help")) {
+    return { name: "help", global, ...(commandName === undefined ? {} : { topic: commandName }) };
+  }
+
+  switch (commandName) {
+    case undefined:
+      rejectOptions(parsed, [], []);
+      if (global.json) {
+        throw new UsageError("--json requires a non-interactive command");
+      }
+      return { name: "tui", global };
+    case "new": {
+      rejectOptions(
+        parsed,
+        ["brief", "output", "schema", "target", "tools", "mcp-servers"],
+        ["fast"],
+      );
+      const explicitBrief = one(parsed, "brief");
+      const positionalBrief = parsed.positionals.join(" ").trim() || undefined;
+      if (explicitBrief !== undefined && positionalBrief !== undefined) {
+        throw new UsageError("Provide the brief either positionally or with --brief, not both");
+      }
+      const brief = explicitBrief ?? positionalBrief;
+      const output = one(parsed, "output");
+      const outputSchema = parseOutputSchema(parsed);
+      const tools = parseTools(parsed);
+      const mcpServers = parseMcpServers(parsed);
+      return {
+        name: "new",
+        global,
+        ...(brief === undefined ? {} : { brief }),
+        fast: parsed.flags.has("fast"),
+        targets: many(parsed, "target"),
+        ...(output === undefined ? {} : { output }),
+        ...(outputSchema === undefined ? {} : { outputSchema }),
+        ...(tools === undefined ? {} : { tools }),
+        ...(mcpServers === undefined ? {} : { mcpServers }),
+      };
+    }
+    case "improve": {
+      rejectOptions(parsed, ["feedback", "output"], ["fast"]);
+      if (parsed.positionals.length !== 1) {
+        throw new UsageError("improve requires exactly one package path");
+      }
+      const feedback = one(parsed, "feedback");
+      const output = one(parsed, "output");
+      return {
+        name: "improve",
+        global,
+        packagePath: parsed.positionals[0]!,
+        ...(feedback === undefined ? {} : { feedback }),
+        fast: parsed.flags.has("fast"),
+        ...(output === undefined ? {} : { output }),
+      };
+    }
+    case "optimize": {
+      rejectOptions(
+        parsed,
+        ["runs", "comparisons", "max-candidates", "minimum-improvement", "output"],
+        [],
+      );
+      const runs = one(parsed, "runs");
+      const comparisons = one(parsed, "comparisons");
+      const output = one(parsed, "output");
+      if (comparisons !== undefined && runs === undefined) {
+        throw new UsageError("--comparisons requires --runs");
+      }
+      if (one(parsed, "minimum-improvement") !== undefined && runs === undefined) {
+        throw new UsageError("--minimum-improvement requires --runs");
+      }
+      const minimumImprovement = parseNonNegativeNumber(
+        one(parsed, "minimum-improvement"),
+        "minimum-improvement",
+      );
+      return {
+        name: "optimize",
+        global,
+        packagePath: packagePath(parsed.positionals, "optimize"),
+        maxCandidates: parseCandidateCount(one(parsed, "max-candidates")),
+        ...(runs === undefined ? {} : { runs }),
+        ...(comparisons === undefined ? {} : { comparisons }),
+        ...(minimumImprovement === undefined ? {} : { minimumImprovement }),
+        ...(output === undefined ? {} : { output }),
+      };
+    }
+    case "compile": {
+      rejectOptions(parsed, ["output", "target"], []);
+      const targets = many(parsed, "target");
+      if (targets.length === 0) {
+        throw new UsageError("compile requires at least one --target");
+      }
+      const output = one(parsed, "output");
+      return {
+        name: "compile",
+        global,
+        packagePath: packagePath(parsed.positionals, "compile"),
+        targets,
+        ...(output === undefined ? {} : { output }),
+      };
+    }
+    case "eval": {
+      rejectOptions(parsed, ["backend", "depth", "fixtures", "mode"], ["allow-execution"]);
+      const modeValue = one(parsed, "mode") ?? "static";
+      if (!["static", "proxy", "live"].includes(modeValue)) {
+        throw new UsageError("--mode must be static, proxy, or live");
+      }
+      const depth = one(parsed, "depth") ?? "default";
+      if (!["quick", "default", "deep"].includes(depth)) {
+        throw new UsageError("--depth must be quick, default, or deep");
+      }
+      const backend = one(parsed, "backend");
+      const fixtures = one(parsed, "fixtures");
+      if (backend !== undefined && backend !== "codex" && backend !== "claude") {
+        throw new UsageError("--backend must be codex or claude");
+      }
+      if (modeValue === "proxy" && !parsed.flags.has("allow-execution")) {
+        throw new UsageError(
+          "proxy evaluation requires explicit --allow-execution",
+        );
+      }
+      if (modeValue === "proxy" && backend === undefined) {
+        throw new UsageError("proxy evaluation requires --backend codex|claude");
+      }
+      if (modeValue !== "static" && fixtures !== undefined) {
+        throw new UsageError("--fixtures is only valid for static evaluation");
+      }
+      if (modeValue === "static" && backend !== undefined) {
+        throw new UsageError("--backend is only valid for proxy or live evaluation");
+      }
+      if (modeValue === "static" && parsed.flags.has("allow-execution")) {
+        throw new UsageError("--allow-execution is only valid for proxy or live evaluation");
+      }
+      if (modeValue === "static" && parsed.options.has("depth")) {
+        throw new UsageError("--depth is only valid for proxy or live evaluation");
+      }
+      if (modeValue === "live" && backend !== undefined) {
+        throw new UsageError(
+          "--backend selects a proxy evaluator and is not valid for unavailable live mode",
+        );
+      }
+      if (modeValue === "live" && parsed.flags.has("allow-execution")) {
+        throw new UsageError(
+          "--allow-execution is not accepted while live evaluation is unavailable",
+        );
+      }
+      return {
+        name: "eval",
+        global,
+        packagePath: packagePath(parsed.positionals, "eval"),
+        mode: modeValue as EvalMode,
+        depth: depth as "quick" | "default" | "deep",
+        ...(backend === undefined ? {} : { backend }),
+        ...(fixtures === undefined ? {} : { fixtures }),
+        allowExecution: parsed.flags.has("allow-execution"),
+      };
+    }
+    case "export": {
+      rejectOptions(parsed, ["format", "output"], []);
+      const formatValue = one(parsed, "format") ?? "directory";
+      if (formatValue !== "directory" && formatValue !== "clipboard") {
+        throw new UsageError("--format must be directory or clipboard");
+      }
+      const output = one(parsed, "output");
+      if (formatValue === "directory" && output === undefined) {
+        throw new UsageError("directory export requires --output");
+      }
+      if (formatValue === "clipboard" && output !== undefined) {
+        throw new UsageError("--output is not valid for clipboard export");
+      }
+      return {
+        name: "export",
+        global,
+        packagePath: packagePath(parsed.positionals, "export"),
+        format: formatValue,
+        ...(output === undefined ? {} : { output }),
+      };
+    }
+    case "install": {
+      rejectOptions(parsed, ["target"], ["apply"]);
+      const target = one(parsed, "target");
+      if (target === undefined) {
+        throw new UsageError("install requires --target");
+      }
+      return {
+        name: "install",
+        global,
+        packagePath: packagePath(parsed.positionals, "install"),
+        target,
+        apply: parsed.flags.has("apply"),
+      };
+    }
+    case "approve": {
+      rejectOptions(parsed, ["output", "statement"], []);
+      const statement = one(parsed, "statement");
+      if (statement === undefined || !statement.trim()) {
+        throw new UsageError("approve requires a non-empty --statement");
+      }
+      const output = one(parsed, "output");
+      return {
+        name: "approve",
+        global,
+        packagePath: packagePath(parsed.positionals, "approve"),
+        statement,
+        ...(output === undefined ? {} : { output }),
+      };
+    }
+    case "preferences": {
+      rejectOptions(parsed, ["default-target"], []);
+      const action = parsed.positionals.shift() ?? "show";
+      if (action !== "show" && action !== "set" && action !== "unset") {
+        throw new UsageError("preferences requires show, set, or unset");
+      }
+      if (parsed.positionals.length !== 0) {
+        throw new UsageError(`preferences ${action} does not accept positional arguments`);
+      }
+      const defaultTarget = one(parsed, "default-target");
+      if (action === "show" && defaultTarget !== undefined) {
+        throw new UsageError("--default-target is only valid for preferences set or unset");
+      }
+      if (action === "set" && (defaultTarget === undefined || !defaultTarget.trim())) {
+        throw new UsageError("preferences set requires --default-target <id>");
+      }
+      if (action === "unset" && defaultTarget !== undefined) {
+        throw new UsageError("preferences unset does not accept --default-target");
+      }
+      return {
+        name: "preferences",
+        global,
+        action,
+        ...(defaultTarget === undefined ? {} : { defaultTarget }),
+      };
+    }
+    case "doctor":
+      rejectOptions(parsed, [], []);
+      if (parsed.positionals.length !== 0) {
+        throw new UsageError("doctor does not accept positional arguments");
+      }
+      return { name: "doctor", global };
+    case "knowledge": {
+      rejectOptions(parsed, ["output", "source"], []);
+      const action = parsed.positionals.shift();
+      if (action !== "check" && action !== "stage") {
+        throw new UsageError("knowledge requires check or stage");
+      }
+      if (parsed.positionals.length !== 0) {
+        throw new UsageError(`knowledge ${action} does not accept positional arguments`);
+      }
+      const output = one(parsed, "output");
+      return {
+        name: "knowledge",
+        global,
+        action,
+        ...(output === undefined ? {} : { output }),
+        sourceIds: many(parsed, "source"),
+      };
+    }
+    default:
+      throw new UsageError(`Unknown command: ${commandName}`);
+  }
+}

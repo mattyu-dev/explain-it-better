@@ -1,0 +1,34 @@
+{
+  "name": "@eib/cli",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "eib": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/.tsbuildinfo"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --root ../.. apps/eib/src"
+  },
+  "dependencies": {
+    "@eib/core": "0.1.0",
+    "@eib/knowledge": "0.1.0",
+    "ink": "^7.0.0",
+    "react": "^19.2.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "ink-testing-library": "^4.0.0"
+  }
+}
