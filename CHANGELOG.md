@@ -8,6 +8,9 @@ use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Installable project-runtime flow: `eib install`, runtime-aware `eib transform`,
+  confirmation handoff, scoped context manifests, explicit deep tracked-repo
+  scanning, and managed Codex/Claude Code integration assets.
 - Private-repository release documentation and a single `npm run release:check`
   gate for local and CI verification.
 - Public documentation now defines EIB as a target-aware prompt optimizer:
@@ -23,6 +26,8 @@ use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Reframed EIB's primary workflow as an automatic runtime prompt compiler:
+  natural request to visible project-aware brief for the detected active agent.
 - Removed agent deployment, MCP runtime, installation, and approval workflow
   framing from the user-facing product story. Evidence bundles are documented
   as reproducible prompt artifacts, not applications to run.

@@ -1,4 +1,24 @@
 const commandHelp: Readonly<Record<string, string>> = {
+  install: `Usage: eib install [--json]
+
+Install project-local EIB runtime assets. It creates only EIB-owned config,
+Codex skill, and Claude Code slash-command files; existing user instructions
+are never overwritten.`,
+  transform: `Usage: eib transform [request] [options]
+
+Compile a natural request into a runtime-aware agent brief. The normal mode
+uses scoped visible context; --deep scans safe tracked repository text files.
+
+Options:
+  --runtime auto       Detect the active agent runtime (default)
+  --for <target>       Export for another reviewed target profile
+  --deep               Explicit full tracked-repository context scan
+  --brief <text>       Request (alternative to positional text)
+  --json               Emit the complete preview as one JSON document`,
+  confirm: `Usage: eib confirm <run-token> [--json]
+
+Confirm a transformed brief and return the exact handoff instructions for the
+active agent.`,
   new: `Usage: eib new [brief] [options]
 
 Turn a human demand into a target-aware prompt package.
@@ -83,6 +103,9 @@ export function renderHelp(topic?: string): string {
 
 Usage:
   eib                              Open the interactive terminal UI
+  eib install                      Install project-local runtime assets
+  eib transform [request]          Compile a runtime-aware agent brief
+  eib confirm <run-token>          Confirm a preview and receive its handoff
   eib new [demand] [options]       Turn a demand into a prompt package
   eib improve <package>            Revise a prompt from feedback
   eib optimize [package]           Compare candidates and gate a best-tested prompt

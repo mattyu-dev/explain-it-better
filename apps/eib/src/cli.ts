@@ -136,6 +136,9 @@ export async function runCli(
       );
     } else {
       io.stdout.write(`${result.message}\n`);
+      if (result.display !== undefined) {
+        io.stdout.write(`\n${result.display}`);
+      }
       if (result.status === "needs_input" && result.data !== undefined) {
         io.stdout.write('Continue interactively with "eib" or provide the missing option.\n');
       }

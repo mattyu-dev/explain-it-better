@@ -7,6 +7,47 @@ import { getRulesForProfile } from "@eib/knowledge";
 import { createCliServices } from "./services.js";
 
 describe("CLI services", () => {
+  it("compiles an architecture request into a runtime-aware preview and requires confirmation", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-transform-"));
+    await writeFile(join(root, "AGENTS.md"), "Run tests before changing source files.\n", "utf8");
+    await writeFile(join(root, "package.json"), '{"name":"runtime-fixture"}\n', "utf8");
+    const services = createCliServices({
+      workspaceRoot: root,
+      runtimeEnvironment: { CODEX_THREAD_ID: "fixture-thread", CODEX_REASONING_EFFORT: "high" },
+    });
+    try {
+      const transformed = await services.execute(
+        {
+          name: "transform",
+          global: { json: true },
+          brief: "I want you to review the architecture to be sure that everything is perfectly wired, what are the next steps to update the project",
+          runtime: "auto",
+          deep: false,
+        },
+        new AbortController().signal,
+      );
+      expect(transformed.exitCode).toBe(0);
+      expect(transformed.data).toMatchObject({
+        target: { id: "openai-gpt-5.6-codex" },
+        targetSelection: "runtime",
+        runtime: { reasoningMode: "high" },
+      });
+      expect(transformed.display).toContain("architecture review and prioritized next steps");
+      expect(transformed.display).toContain("AGENTS.md");
+      const token = (transformed.data as { runToken: string }).runToken;
+
+      const confirmed = await services.execute(
+        { name: "confirm", global: { json: true }, token },
+        new AbortController().signal,
+      );
+      expect(confirmed.exitCode).toBe(0);
+      expect(confirmed.display).toContain("EIB execution contract");
+      expect(confirmed.data).toMatchObject({ runToken: token });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses complete static fixture outputs to record static validation", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-static-fixtures-"));
     const destination = join(root, "package");

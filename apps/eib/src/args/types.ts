@@ -30,6 +30,17 @@ export type CandidateCount = 1 | 2 | 3;
 
 export type CliCommand =
   | { name: "tui"; global: GlobalOptions }
+  | { name: "install"; global: GlobalOptions }
+  | {
+      name: "transform";
+      global: GlobalOptions;
+      brief?: string;
+      runtime: "auto";
+      deep: boolean;
+      /** Explicit destination only when exporting a brief for another agent. */
+      explicitTarget?: string;
+    }
+  | { name: "confirm"; global: GlobalOptions; token: string }
   | {
       name: "new";
       global: GlobalOptions;

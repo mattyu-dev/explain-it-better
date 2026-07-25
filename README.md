@@ -1,10 +1,10 @@
 # Explain It Better
 
-Explain It Better (`eib`) is a local, terminal-first, target-aware prompt
-optimizer. It turns a human demand into a paste-ready prompt for a named model
-or surface. Its output is an evidence bundle: a structured interpretation of
-the demand, target-specific prompt candidates, a task-specific held-out suite,
-and any evidence used to select a winner.
+Explain It Better (`eib`) is a local, terminal-first runtime prompt compiler.
+It turns a human demand into a project-aware, target-specific agent brief for
+the AI that is currently running. Its output is an evidence bundle: a
+structured interpretation of the demand, target-specific prompt candidates, a
+task-specific held-out suite, and any evidence used to select a winner.
 
 ```text
 human demand → structured intent → target-aware variants → demand-specific
@@ -30,6 +30,45 @@ npm install
 npm run build
 node apps/eib/dist/cli.js
 ```
+
+## Install and use in a project
+
+Install the project-local runtime assets once:
+
+```bash
+eib install
+```
+
+This writes only EIB-owned assets: `.eibrc.json`, a Codex project skill, and
+Claude Code `/eib` and `/eib-deep` commands. It never overwrites `AGENTS.md`,
+`CLAUDE.md`, or another user-owned instruction file.
+
+Then transform a natural request without choosing a target manually:
+
+```bash
+eib transform "review the architecture and tell me what to update" --runtime auto
+```
+
+EIB detects a supported active runtime, resolves its reviewed target profile,
+selects visible project context, and returns a preview plus a run token. It
+does not start work at this point. After reviewing the target, context
+manifest, and assumptions:
+
+```bash
+eib confirm <run-token>
+```
+
+`confirm` returns the exact handoff brief for the active agent. Use
+`/eib "request"` in an installed supported host; use
+`/eib-deep "complex request"` only when an explicit full tracked-repository
+scan is appropriate. The CLI equivalent is `eib transform --deep …`.
+
+Scoped mode reads project instructions, manifests, and request-relevant files.
+Deep mode scans tracked readable text files and records every included or
+skipped path. Both reject ignored/generated directories, binary files,
+secret-named paths, and detected secret content. If the runtime cannot be
+identified exactly, EIB asks for `--for <target>` rather than pretending its
+prompt is target-specific.
 
 Start with a demand and target. EIB parses the demand into visible fields such
 as outcome, audience, deliverable, constraints, inputs, exclusions, success
@@ -113,6 +152,9 @@ evaluation cases, scores, provenance, and verification report.
 
 ```text
 eib
+eib install
+eib transform [request] --runtime auto [--deep] [--for <target>]
+eib confirm <run-token>
 eib new [brief] [--target <id>] [--fast] [--output <directory>]
         [--schema '<JSON object>']
 eib improve <package> --feedback <correction> [--output <directory>]

@@ -138,8 +138,33 @@ describe("parseArgs", () => {
     ).toThrow("--allow-execution is only valid for proxy or live evaluation");
   });
 
+  it("parses project-runtime installation and transforms", () => {
+    expect(parseArgs(["install"])).toEqual({ name: "install", global: { json: false } });
+    expect(parseArgs([
+      "transform",
+      "review the architecture",
+      "--runtime",
+      "auto",
+      "--deep",
+      "--for",
+      "anthropic-claude-code-sonnet-5",
+    ])).toEqual({
+      name: "transform",
+      global: { json: false },
+      brief: "review the architecture",
+      runtime: "auto",
+      deep: true,
+      explicitTarget: "anthropic-claude-code-sonnet-5",
+    });
+    expect(parseArgs(["confirm", "c6e75c8d-2cb5-4c02-8775-e833c2b028fd"])).toMatchObject({
+      name: "confirm",
+    });
+    expect(() => parseArgs(["transform", "request", "--runtime", "codex"])).toThrow(
+      "only --runtime auto",
+    );
+  });
+
   it("rejects retired agent-runtime commands", () => {
-    expect(() => parseArgs(["install", "package.json"])).toThrow("Unknown command: install");
     expect(() => parseArgs(["approve", "package"])).toThrow("Unknown command: approve");
   });
 

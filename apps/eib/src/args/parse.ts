@@ -30,10 +30,13 @@ const VALUE_OPTIONS = new Set([
   "schema",
   "source",
   "target",
+  "for",
+  "runtime",
 ]);
 
 const FLAG_OPTIONS = new Set([
   "allow-execution",
+  "deep",
   "fast",
   "help",
   "json",
@@ -210,6 +213,43 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         throw new UsageError("--json requires a non-interactive command");
       }
       return { name: "tui", global };
+    case "install":
+      rejectOptions(parsed, [], []);
+      if (parsed.positionals.length !== 0) {
+        throw new UsageError("install does not accept positional arguments");
+      }
+      return { name: "install", global };
+    case "transform": {
+      rejectOptions(parsed, ["brief", "runtime", "for"], ["deep"]);
+      const explicitBrief = one(parsed, "brief");
+      const positionalBrief = parsed.positionals.join(" ").trim() || undefined;
+      if (explicitBrief !== undefined && positionalBrief !== undefined) {
+        throw new UsageError("Provide the request either positionally or with --brief, not both");
+      }
+      const brief = explicitBrief ?? positionalBrief;
+      const runtime = one(parsed, "runtime") ?? "auto";
+      if (runtime !== "auto") {
+        throw new UsageError("transform currently supports only --runtime auto");
+      }
+      const explicitTarget = one(parsed, "for");
+      return {
+        name: "transform",
+        global,
+        ...(brief === undefined
+          ? {}
+          : { brief }),
+        runtime: "auto",
+        deep: parsed.flags.has("deep"),
+        ...(explicitTarget === undefined ? {} : { explicitTarget }),
+      };
+    }
+    case "confirm": {
+      rejectOptions(parsed, [], []);
+      if (parsed.positionals.length !== 1) {
+        throw new UsageError("confirm requires exactly one run token");
+      }
+      return { name: "confirm", global, token: parsed.positionals[0]! };
+    }
     case "new": {
       rejectOptions(
         parsed,
