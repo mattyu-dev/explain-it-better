@@ -131,6 +131,30 @@ function inferObjective(brief: string): string {
 }
 
 function inferDeliverables(brief: string): string[] {
+  // A common project request asks for both a review and the practical route
+  // forward without using an explicit "return a …" clause.  Preserve that
+  // two-part artifact rather than falling through to a vague fast-draft
+  // placeholder.  The follow-up qualifier is optional so an architecture
+  // review remains a concrete deliverable on its own.
+  const reviewMatch =
+    /\b(?:review|audit|assess|inspect|evaluate)\s+(?:the\s+)?(architecture|codebase|project|system|implementation)\b/iu.exec(
+      brief,
+    );
+  if (reviewMatch?.[1]) {
+    const nextSteps =
+      /\b(?:what are|identify|recommend|outline|provide)\s+(?:the\s+)?next steps?(?:\s+(?:to|for)\s+([^.!?\n]+))?/iu.exec(
+        brief,
+      );
+    const reviewed = reviewMatch[1].toLowerCase();
+    return [
+      nextSteps === null
+        ? `${reviewed} review`
+        : `${reviewed} review and prioritized next steps${
+            nextSteps[1] ? ` to ${nextSteps[1].trim()}` : ""
+          }`,
+    ];
+  }
+
   // Requests such as "make it better" describe a goal, not an artifact. Give
   // an explicit return/provide/deliver clause priority when it exists, then
   // fall back to an authoring verb. Values deliberately run to the sentence or

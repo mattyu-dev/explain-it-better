@@ -89,6 +89,17 @@ describe("adaptive intent compiler", () => {
     expect(intent.outputContract.format).not.toBe("code");
   });
 
+  it("infers an architecture review and next-step artifact from ordinary project language", () => {
+    const intent = analyzeBrief(
+      "I want you to review the architecture to be sure that everything is perfectly wired, what are the next steps to update the project",
+    );
+
+    expect(intent.deliverables).toEqual([
+      "architecture review and prioritized next steps to update the project",
+    ]);
+    expect(intent.unresolvedAmbiguity.map((item) => item.field)).not.toContain("deliverables");
+  });
+
   it("moves a sentence-level do-not clause into exclusions", () => {
     const intent = analyzeBrief(
       "Return an implementation plan. Do not recommend unverified provider integrations.",
