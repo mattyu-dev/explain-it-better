@@ -38,18 +38,13 @@ import {
 } from "@eib/core";
 import {
   KNOWLEDGE_PACK_VERSION,
-  checkKnowledgeSources,
-  createKnowledgePromotionDossier,
   getRulesForProfile,
   getTargetProfile,
-  KnowledgeRefreshReportSchema,
   listTargetProfiles,
-  refreshKnowledgeUpdates,
   sourceManifest,
-  stageKnowledgeUpdates,
   validateTargetConfiguration,
-  type KnowledgeDiscoveryCandidate,
   type KnowledgeTargetProfile,
+  type refreshKnowledgeUpdates,
 } from "@eib/knowledge";
 import { z } from "zod";
 import {
@@ -67,11 +62,12 @@ import {
   type UserPreferences,
 } from "./preferences.js";
 import { executeRuntimeConfirmation, executeRuntimeTransform } from "./runtime-workflow.js";
-import type { CliServiceResult } from "./service-contracts.js";
-import type { CliCommand, ExecutionBackend, ExitCode } from "./args/types.js";
+import { executeKnowledgeCommand } from "./knowledge-workflow.js";
+import { CliServiceError, type CliServiceResult } from "./service-contracts.js";
+import type { CliCommand, ExecutionBackend } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
 
-export type { CliServiceResult } from "./service-contracts.js";
+export { CliServiceError, type CliServiceResult } from "./service-contracts.js";
 
 export interface CliServices {
   execute(command: Exclude<CliCommand, { name: "tui" | "help" | "version" }>, signal: AbortSignal): Promise<CliServiceResult>;
@@ -103,18 +99,6 @@ export interface CliServiceOptions {
   readonly knowledgeRefresh?: typeof refreshKnowledgeUpdates;
 }
 
-export class CliServiceError extends Error {
-  public readonly exitCode: ExitCode;
-  public readonly details?: unknown;
-
-  public constructor(message: string, exitCode: ExitCode = Codes.error, details?: unknown) {
-    super(message);
-    this.name = "CliServiceError";
-    this.exitCode = exitCode;
-    this.details = details;
-  }
-}
-
 function assertNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) {
     return;
@@ -122,32 +106,6 @@ function assertNotAborted(signal: AbortSignal): void {
   throw signal.reason instanceof Error
     ? signal.reason
     : new DOMException("The operation was cancelled.", "AbortError");
-}
-
-function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    assertNotAborted(signal);
-  }
-  return new Promise<T>((resolvePromise, rejectPromise) => {
-    const onAbort = (): void => {
-      rejectPromise(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new DOMException("The operation was cancelled.", "AbortError"),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolvePromise(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        rejectPromise(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
 }
 
 function targetFilename(profile: KnowledgeTargetProfile): string {
@@ -1440,122 +1398,12 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             exitCode: Codes.success,
           };
         }
-        case "knowledge": {
-          if (command.action === "promote-plan") {
-            const separator = command.candidate!.indexOf("/");
-            const provider = command.candidate!.slice(0, separator).trim();
-            const model = command.candidate!.slice(separator + 1).trim();
-            if (provider.length === 0 || model.length === 0 || model.includes("/")) {
-              throw new CliServiceError(
-                "knowledge promote-plan requires exactly <provider/model>.",
-                Codes.usage,
-              );
-            }
-            let discoveryCandidates: readonly KnowledgeDiscoveryCandidate[] = [];
-            if (command.proposalPath !== undefined) {
-              let proposed: unknown;
-              try {
-                proposed = JSON.parse(await readFile(command.proposalPath, "utf8")) as unknown;
-              } catch (error) {
-                throw new CliServiceError(
-                  `Could not read refresh proposal ${JSON.stringify(command.proposalPath)}.`,
-                  Codes.usage,
-                  error instanceof Error ? { reason: error.message } : undefined,
-                );
-              }
-              const parsedProposal = KnowledgeRefreshReportSchema.safeParse(proposed);
-              if (!parsedProposal.success) {
-                throw new CliServiceError(
-                  `Refresh proposal ${JSON.stringify(command.proposalPath)} is invalid.`,
-                  Codes.usage,
-                  { issues: parsedProposal.error.issues },
-                );
-              }
-              discoveryCandidates = parsedProposal.data.discovery.candidates;
-            }
-            let dossier;
-            try {
-              dossier = createKnowledgePromotionDossier({
-                provider: provider as never,
-                model,
-                discoveryCandidates,
-              });
-            } catch (error) {
-              throw new CliServiceError(
-                `Unknown or invalid promotion candidate ${JSON.stringify(command.candidate)}.`,
-                Codes.usage,
-                error instanceof Error ? { reason: error.message } : undefined,
-              );
-            }
-            const defaultName = `promotion-${provider}-${dossier.candidate.model}.json`;
-            const output = command.output ?? join(".eib", "knowledge", defaultName);
-            const written = await writeJsonExclusive(output, dossier);
-            return {
-              status: "ok",
-              message:
-                `Wrote a non-active promotion dossier at ${written} for ${dossier.candidate.provider}/${dossier.candidate.model}. ` +
-                "No profile, rule, capability, or active knowledge-pack file was changed.",
-              data: { dossier, written },
-              exitCode: Codes.success,
-            };
-          }
-          if (command.action === "refresh") {
-            const proposal = await abortable(
-              (options.knowledgeRefresh ?? refreshKnowledgeUpdates)({
-                ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),
-              }),
-              signal,
-            );
-            assertNotAborted(signal);
-            const defaultName = `refresh-${proposal.refreshedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`;
-            const output = command.output ?? join(".eib", "knowledge", defaultName);
-            const written = await writeJsonExclusive(output, proposal);
-            const candidateCount = proposal.discovery.candidates.length;
-            const affectedTargetCount = proposal.affectedTargetIds.length;
-            const incomplete =
-              proposal.sourceCheck.status === "incomplete" ||
-              proposal.discovery.unavailableSourceIds.length > 0;
-            return {
-              status: "ok",
-              message:
-                `Wrote a non-active knowledge refresh proposal at ${written} ` +
-                `(${candidateCount} discovered candidate${candidateCount === 1 ? "" : "s"}; ` +
-                `${affectedTargetCount} affected target${affectedTargetCount === 1 ? "" : "s"}). ` +
-                "Activation remains blocked pending source and rule review.",
-              data: { proposal, written },
-              // Partial source evidence is useful, but never promotable.
-              exitCode: incomplete ? Codes.error : Codes.success,
-            };
-          }
-          const report = await abortable(
-            checkKnowledgeSources({
-              ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),
-            }),
+        case "knowledge":
+          return executeKnowledgeCommand(
+            command,
             signal,
+            options.knowledgeRefresh === undefined ? {} : { refresh: options.knowledgeRefresh },
           );
-          assertNotAborted(signal);
-          if (command.action === "check") {
-            return {
-              status: "ok",
-              message:
-                report.status === "current"
-                  ? "Knowledge sources match the reviewed manifest."
-                  : `Knowledge source status: ${report.status}.`,
-              data: report,
-              exitCode: report.status === "current" ? Codes.success : Codes.error,
-            };
-          }
-          const staged = stageKnowledgeUpdates({ report });
-          const defaultName = `staged-${staged.stagedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`;
-          const output = command.output ?? join(".eib", "knowledge", defaultName);
-          const written = await writeJsonExclusive(output, staged);
-          return {
-            status: "ok",
-            message: `Staged a non-active knowledge review at ${written}.`,
-            data: { staged, written },
-            exitCode: report.status === "incomplete" ? Codes.error : Codes.success,
-          };
-        }
       }
     },
   };
