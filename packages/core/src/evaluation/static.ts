@@ -69,6 +69,15 @@ interface CheckOutcome {
 
 type JsonSchema = Readonly<Record<string, unknown>>;
 
+const MAX_SCHEMA_VALIDATION_STEPS = 4_096;
+
+interface SchemaValidationState {
+  /** Bounds work from adversarial composition trees and recursive references. */
+  remainingSteps: number;
+  /** Tracks only the active path, so recursive schemas may advance through a value. */
+  readonly activePairs: Map<JsonSchema, Set<unknown>>;
+}
+
 const SUPPORTED_SCHEMA_KEYWORDS = new Set([
   "$defs",
   "$id",
@@ -231,6 +240,36 @@ function validateSchemaValue(
   rootSchema: JsonSchema,
   path: string,
   depth: number,
+  state: SchemaValidationState,
+): readonly string[] {
+  if (state.remainingSteps === 0) {
+    return [`${describePath(path)} exceeded the bounded schema-validation work budget.`];
+  }
+  state.remainingSteps -= 1;
+
+  const activeValues = state.activePairs.get(schema);
+  if (activeValues?.has(value)) {
+    return [`${describePath(path)} has a recursive schema reference for the same JSON value.`];
+  }
+  const currentValues = activeValues ?? new Set<unknown>();
+  currentValues.add(value);
+  if (activeValues === undefined) state.activePairs.set(schema, currentValues);
+
+  try {
+    return validateSchemaValueInner(value, schema, rootSchema, path, depth, state);
+  } finally {
+    currentValues.delete(value);
+    if (currentValues.size === 0) state.activePairs.delete(schema);
+  }
+}
+
+function validateSchemaValueInner(
+  value: unknown,
+  schema: JsonSchema,
+  rootSchema: JsonSchema,
+  path: string,
+  depth: number,
+  state: SchemaValidationState,
 ): readonly string[] {
   if (depth > 32) {
     return [`${describePath(path)} exceeded the bounded schema-validation depth.`];
@@ -268,14 +307,14 @@ function validateSchemaValue(
   const allOf = schemaArray(schema["allOf"]);
   if (allOf !== undefined) {
     for (const branch of allOf) {
-      issues.push(...validateSchemaValue(value, branch, rootSchema, path, depth + 1));
+      issues.push(...validateSchemaValue(value, branch, rootSchema, path, depth + 1, state));
     }
   }
   const anyOf = schemaArray(schema["anyOf"]);
   if (
     anyOf !== undefined &&
     !anyOf.some(
-      (branch) => validateSchemaValue(value, branch, rootSchema, path, depth + 1).length === 0,
+      (branch) => validateSchemaValue(value, branch, rootSchema, path, depth + 1, state).length === 0,
     )
   ) {
     issues.push(`${describePath(path)} does not satisfy any anyOf branch.`);
@@ -284,7 +323,7 @@ function validateSchemaValue(
   if (
     oneOf !== undefined &&
     oneOf.filter(
-      (branch) => validateSchemaValue(value, branch, rootSchema, path, depth + 1).length === 0,
+      (branch) => validateSchemaValue(value, branch, rootSchema, path, depth + 1, state).length === 0,
     ).length !== 1
   ) {
     issues.push(`${describePath(path)} must satisfy exactly one oneOf branch.`);
@@ -310,7 +349,7 @@ function validateSchemaValue(
       if (!isRecord(resolved)) {
         issues.push(`${describePath(path)} has unresolved schema reference ${reference}.`);
       } else {
-        issues.push(...validateSchemaValue(value, resolved, rootSchema, path, depth + 1));
+        issues.push(...validateSchemaValue(value, resolved, rootSchema, path, depth + 1, state));
       }
     }
   }
@@ -339,6 +378,7 @@ function validateSchemaValue(
             rootSchema,
             `${path}/${escapedProperty}`,
             depth + 1,
+            state,
           ),
         );
       }
@@ -359,6 +399,7 @@ function validateSchemaValue(
             rootSchema,
             `${path}/${escapedProperty}`,
             depth + 1,
+            state,
           ),
         );
       }
@@ -370,7 +411,7 @@ function validateSchemaValue(
     if (isRecord(items)) {
       value.forEach((item, index) => {
         issues.push(
-          ...validateSchemaValue(item, items, rootSchema, `${path}/${index}`, depth + 1),
+          ...validateSchemaValue(item, items, rootSchema, `${path}/${index}`, depth + 1, state),
         );
       });
     }
@@ -422,7 +463,10 @@ export function runOutputSchemaCheck(output: string, schema: JsonSchema): CheckO
     return { passed: false, evidence: "Output is not valid JSON and cannot match the schema." };
   }
 
-  const issues = validateSchemaValue(value, schema, schema, "", 0);
+  const issues = validateSchemaValue(value, schema, schema, "", 0, {
+    remainingSteps: MAX_SCHEMA_VALIDATION_STEPS,
+    activePairs: new Map(),
+  });
   return issues.length === 0
     ? {
         passed: true,

@@ -194,7 +194,11 @@ export interface KnowledgeFetchResponse {
   readonly url?: string;
   /** Optional to keep deterministic test fetchers small. */
   readonly headers?: { get(name: string): string | null };
-  text(): Promise<string>;
+  /**
+   * Raw response stream. Knowledge workflows enforce their size limit while
+   * reading this stream, before an unbounded remote document is buffered.
+   */
+  readonly body: ReadableStream<Uint8Array> | null;
 }
 
 export type KnowledgeFetcher = (

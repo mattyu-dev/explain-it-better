@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import { createCliServices } from "./services.js";
 describe("CLI services", () => {
   it("writes a non-active Claude Opus 5 promotion dossier without making it selectable", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-promotion-dossier-"));
-    const output = join(root, "opus-5.json");
+    const output = join(".eib", "knowledge", "promotion-anthropic-claude-opus-5.json");
     try {
       const services = createCliServices({ workspaceRoot: root });
       const result = await services.execute(
@@ -18,7 +18,6 @@ describe("CLI services", () => {
           global: { json: true },
           action: "promote-plan",
           candidate: "anthropic/claude-opus-5",
-          output,
           sourceIds: [],
         },
         new AbortController().signal,
@@ -36,7 +35,7 @@ describe("CLI services", () => {
           promotion: { status: "pending_human_review" },
         },
       });
-      const saved = JSON.parse(await readFile(output, "utf8")) as {
+      const saved = JSON.parse(await readFile(join(root, output), "utf8")) as {
         candidate: { model: string };
         promotion: { nonActivationGuarantee: string };
       };
@@ -49,9 +48,10 @@ describe("CLI services", () => {
 
   it("writes a non-active knowledge refresh proposal without changing the active pack", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-knowledge-refresh-"));
-    const output = join(root, "proposal.json");
+    const output = "review/proposal.json";
     const receivedSourceIds: string[][] = [];
     const services = createCliServices({
+      workspaceRoot: root,
       knowledgeRefresh: (options) => {
         receivedSourceIds.push([...(options?.sourceIds ?? [])]);
         return Promise.resolve({
@@ -104,7 +104,7 @@ describe("CLI services", () => {
       expect(result.message).toContain("non-active knowledge refresh proposal");
       expect(result.message).toContain("Activation remains blocked");
       expect(receivedSourceIds).toEqual([["openai-codex-docs"]]);
-      const saved = JSON.parse(await readFile(output, "utf8")) as { activation: string; discovery: { candidates: unknown[] } };
+      const saved = JSON.parse(await readFile(join(root, output), "utf8")) as { activation: string; discovery: { candidates: unknown[] } };
       expect(saved.activation).toBe("blocked_pending_review");
       expect(saved.discovery.candidates).toHaveLength(1);
     } finally {
@@ -133,7 +133,7 @@ describe("CLI services", () => {
           global: { json: true },
           action: "refresh",
           sourceIds: [],
-          output: join(root, "incomplete-proposal.json"),
+          output: "incomplete-proposal.json",
         },
         new AbortController().signal,
       );
@@ -141,6 +141,52 @@ describe("CLI services", () => {
       expect(result.data).toMatchObject({ proposal: { activation: "blocked_pending_review" } });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects knowledge output paths outside its configured workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-knowledge-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "eib-knowledge-outside-"));
+    try {
+      const services = createCliServices({ workspaceRoot: root });
+      await expect(services.execute(
+        {
+          name: "knowledge",
+          global: { json: true },
+          action: "promote-plan",
+          candidate: "anthropic/claude-opus-5",
+          output: join(outside, "opus-5.json"),
+          sourceIds: [],
+        },
+        new AbortController().signal,
+      )).rejects.toThrow("Refusing unsafe knowledge output path");
+      await expect(readdir(outside)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects default knowledge output redirected through a workspace symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-knowledge-symlink-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "eib-knowledge-symlink-outside-"));
+    try {
+      await symlink(outside, join(root, ".eib"));
+      const services = createCliServices({ workspaceRoot: root });
+      await expect(services.execute(
+        {
+          name: "knowledge",
+          global: { json: true },
+          action: "promote-plan",
+          candidate: "anthropic/claude-opus-5",
+          sourceIds: [],
+        },
+        new AbortController().signal,
+      )).rejects.toThrow("Refusing symlink in knowledge output path");
+      await expect(readdir(outside)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   });
 

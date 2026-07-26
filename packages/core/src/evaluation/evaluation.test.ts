@@ -193,6 +193,44 @@ describe("deterministic static evaluation", () => {
     expect(report.results.every((result) => result.metrics?.outputValidity === 1)).toBe(true);
   });
 
+  it("fails closed on recursive or excessively branching output schemas while allowing finite recursion", () => {
+    const recursiveCycle = {
+      $ref: "#/$defs/loop",
+      $defs: {
+        loop: { $ref: "#/$defs/loop" },
+      },
+    };
+    const cycleResult = runOutputSchemaCheck("null", recursiveCycle);
+    expect(cycleResult.passed).toBe(false);
+    expect(cycleResult.evidence).toContain("recursive schema reference");
+
+    const finiteRecursiveSchema = {
+      $ref: "#/$defs/node",
+      $defs: {
+        node: {
+          anyOf: [
+            { type: "null" },
+            {
+              type: "object",
+              properties: { next: { $ref: "#/$defs/node" } },
+              required: ["next"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+    };
+    expect(runOutputSchemaCheck('{"next":{"next":null}}', finiteRecursiveSchema).passed).toBe(true);
+
+    let branchingSchema: Record<string, unknown> = { type: "null" };
+    for (let depth = 0; depth < 13; depth += 1) {
+      branchingSchema = { allOf: [branchingSchema, branchingSchema] };
+    }
+    const branchingResult = runOutputSchemaCheck("null", branchingSchema);
+    expect(branchingResult.passed).toBe(false);
+    expect(branchingResult.evidence).toContain("work budget");
+  });
+
   it("requires complete output fixtures and all suite categories", () => {
     const promptPackage = makePromptPackage();
     const incomplete = evaluateStatic(promptPackage, { "case-1": "answer" });
@@ -332,7 +370,7 @@ describe("external evaluation boundary", () => {
     await expect(
       runExternalEvaluation(
         promptPackage,
-        { mode: "proxy" },
+        { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage) },
         { id: "fake", evaluate },
       ),
     ).rejects.toThrow("disabled by default");
@@ -355,7 +393,7 @@ describe("external evaluation boundary", () => {
     );
     const report = await runExternalEvaluation(
       promptPackage,
-      { mode: "proxy", allowExecution: true, repetitions: 1 },
+      { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
       { id: "fake", evaluate },
     );
     expect(report.passed).toBe(true);
@@ -371,7 +409,7 @@ describe("external evaluation boundary", () => {
     await expect(
       runExternalEvaluation(
         promptPackage,
-        { mode: "proxy", allowExecution: true, repetitions: 1 },
+        { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
         {
           id: "no-quality-evidence",
           evaluate: (invocation) =>
@@ -391,16 +429,26 @@ describe("external evaluation boundary", () => {
     ).rejects.toThrow(/no observable prompt-quality evidence/iu);
   });
 
-  it("rejects a verification label without complete passing static evidence", async () => {
-    const forged = { ...makePromptPackage(), verification: "statically_validated" as const };
+  it("recomputes static validation instead of trusting forged imported results", async () => {
+    const source = staticallyValidatedPackage();
+    const forged = {
+      ...source,
+      verification: "statically_validated" as const,
+      results: source.results.map((result) => ({ ...result, passed: true, score: 1 })),
+    };
     const evaluate = vi.fn(() => Promise.resolve([]));
     await expect(
       runExternalEvaluation(
         forged,
-        { mode: "proxy", allowExecution: true, repetitions: 1 },
+        {
+          mode: "proxy",
+          staticOutputs: { ...completeStaticOutputs(source), "case-1": "" },
+          allowExecution: true,
+          repetitions: 1,
+        },
         { id: "fake", evaluate },
       ),
-    ).rejects.toThrow("complete passing static evidence");
+    ).rejects.toThrow("fresh passing static validation run");
     expect(evaluate).not.toHaveBeenCalled();
   });
 
@@ -423,7 +471,7 @@ describe("external evaluation boundary", () => {
     await expect(
       runExternalEvaluation(
         promptPackage,
-        { mode: "proxy", allowExecution: true, repetitions: 1 },
+        { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
         { id: "fake", evaluate },
       ),
     ).rejects.toThrow("duplicate case/target pair");
@@ -447,7 +495,7 @@ describe("external evaluation boundary", () => {
     await expect(
       runExternalEvaluation(
         promptPackage,
-        { mode: "proxy", allowExecution: true, repetitions: 1 },
+        { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
         {
           id: "single-target-fixture",
           evaluate: (invocation) =>
@@ -471,7 +519,7 @@ describe("external evaluation boundary", () => {
     const promptPackage = staticallyValidatedPackage();
     const report = await runExternalEvaluation(
       promptPackage,
-      { mode: "proxy", allowExecution: true, repetitions: 3 },
+      { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 3 },
       {
         id: "trusted-backend",
         evaluate: (invocation) =>
@@ -525,7 +573,7 @@ describe("external evaluation boundary", () => {
 
     const report = await runExternalEvaluation(
       promptPackage,
-      { mode: "live", allowExecution: true, repetitions: 1 },
+      { mode: "live", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
       { id: "native-fixture", evaluate },
     );
     expect(report.passed).toBe(false);
@@ -548,12 +596,12 @@ describe("external evaluation boundary", () => {
       );
     const successful = await runExternalEvaluation(
       promptPackage,
-      { mode: "proxy", allowExecution: true, repetitions: 1 },
+      { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
       { id: "passing", evaluate: passing },
     );
     const failed = await runExternalEvaluation(
       successful.promptPackage,
-      { mode: "proxy", allowExecution: true, repetitions: 1 },
+      { mode: "proxy", staticOutputs: completeStaticOutputs(promptPackage), allowExecution: true, repetitions: 1 },
       {
         id: "failing",
         evaluate: (invocation) =>

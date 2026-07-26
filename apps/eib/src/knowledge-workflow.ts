@@ -1,5 +1,5 @@
-import { mkdir, open, readFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   KnowledgeRefreshReportSchema,
   checkKnowledgeSources,
@@ -10,6 +10,7 @@ import {
 } from "@eib/knowledge";
 import type { CliCommand } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
+import { SafePathError, safeWorkspacePath, writeNewText } from "./safe-path.js";
 import { CliServiceError, type CliServiceResult } from "./service-contracts.js";
 
 export interface KnowledgeWorkflowOptions {
@@ -50,17 +51,18 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-async function writeJsonExclusive(path: string, value: unknown): Promise<string> {
-  const absolute = resolve(path);
-  await mkdir(dirname(absolute), { recursive: true });
-  const handle = await open(absolute, "wx", 0o600);
+async function writeJsonExclusive(root: string, path: string, value: unknown): Promise<string> {
   try {
-    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
+    const absolute = await safeWorkspacePath(root, path, "knowledge output path");
+    await writeNewText(absolute, `${JSON.stringify(value, null, 2)}\n`, 0o600, "knowledge output path");
+    return absolute;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new CliServiceError(
+      `Could not write knowledge output: ${reason}`,
+      error instanceof SafePathError ? Codes.usage : Codes.error,
+    );
   }
-  return absolute;
 }
 
 function parseCandidate(candidate: string): { provider: string; model: string } {
@@ -76,6 +78,7 @@ function parseCandidate(candidate: string): { provider: string; model: string } 
 export async function executeKnowledgeCommand(
   command: Extract<CliCommand, { name: "knowledge" }>,
   signal: AbortSignal,
+  workspaceRoot: string,
   options: KnowledgeWorkflowOptions = {},
 ): Promise<CliServiceResult> {
   if (command.action === "promote-plan") {
@@ -113,7 +116,7 @@ export async function executeKnowledgeCommand(
       );
     }
     const output = command.output ?? join(".eib", "knowledge", `promotion-${provider}-${dossier.candidate.model}.json`);
-    const written = await writeJsonExclusive(output, dossier);
+    const written = await writeJsonExclusive(workspaceRoot, output, dossier);
     return {
       status: "ok",
       message: `Wrote a non-active promotion dossier at ${written} for ${dossier.candidate.provider}/${dossier.candidate.model}. No profile, rule, capability, or active knowledge-pack file was changed.`,
@@ -135,7 +138,7 @@ export async function executeKnowledgeCommand(
       "knowledge",
       `refresh-${proposal.refreshedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`,
     );
-    const written = await writeJsonExclusive(output, proposal);
+    const written = await writeJsonExclusive(workspaceRoot, output, proposal);
     const candidateCount = proposal.discovery.candidates.length;
     const affectedTargetCount = proposal.affectedTargetIds.length;
     const incomplete = proposal.sourceCheck.status === "incomplete" || proposal.discovery.unavailableSourceIds.length > 0;
@@ -162,7 +165,7 @@ export async function executeKnowledgeCommand(
   }
   const staged = stageKnowledgeUpdates({ report });
   const output = command.output ?? join(".eib", "knowledge", `staged-${staged.stagedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`);
-  const written = await writeJsonExclusive(output, staged);
+  const written = await writeJsonExclusive(workspaceRoot, output, staged);
   return {
     status: "ok",
     message: `Staged a non-active knowledge review at ${written}.`,

@@ -15,9 +15,12 @@ import {
 } from "./schemas.js";
 import { checkKnowledgeSources } from "./drift.js";
 import { targetProfiles } from "./profiles.js";
+import {
+  KnowledgeDocumentTooLargeError,
+  MAX_KNOWLEDGE_DOCUMENT_BYTES,
+  readKnowledgeResponseBody,
+} from "./response-body.js";
 import { sourceManifest } from "./sources.js";
-
-const MAX_DISCOVERY_DOCUMENT_BYTES = 2 * 1024 * 1024;
 
 /**
  * This registry is deliberately separate from `sourceManifest`: its pages are
@@ -425,6 +428,11 @@ async function discoverFromSource(
     };
   }
   const controller = new AbortController();
+  let responseMetadata: {
+    finalUrl: string | null;
+    httpStatus: number | null;
+    contentType: string | null;
+  } = { finalUrl: null, httpStatus: null, contentType: null };
   const timeout = setTimeout(() => {
     controller.abort(new Error(`Timed out after ${timeoutMs}ms`));
   }, timeoutMs);
@@ -432,6 +440,11 @@ async function discoverFromSource(
     const response = await fetcher(source.url, { signal: controller.signal });
     const finalUrl = response.url ?? source.url;
     const contentType = response.headers?.get("content-type") ?? null;
+    responseMetadata = {
+      finalUrl,
+      httpStatus: response.status,
+      contentType,
+    };
     if (!response.ok) {
       return {
         extraction: null,
@@ -475,10 +488,10 @@ async function discoverFromSource(
       };
     }
     const advertisedLength = Number(response.headers?.get("content-length"));
-    // Reject a truthful oversized response before materializing its text in
-    // memory. The post-read byte check below remains mandatory because this
-    // header is optional and not trusted as a safety boundary.
-    if (Number.isSafeInteger(advertisedLength) && advertisedLength > MAX_DISCOVERY_DOCUMENT_BYTES) {
+    // Reject a truthful oversized response before reading it. The streaming
+    // byte check below remains mandatory because this header is optional and
+    // not trusted as a safety boundary.
+    if (Number.isSafeInteger(advertisedLength) && advertisedLength > MAX_KNOWLEDGE_DOCUMENT_BYTES) {
       return {
         extraction: null,
         receipt: receipt({
@@ -488,27 +501,12 @@ async function discoverFromSource(
           bodyBytes: advertisedLength,
           bodyHash: null,
           outcome: "oversize_document",
-          error: `Official source advertised ${advertisedLength} bytes, above the ${MAX_DISCOVERY_DOCUMENT_BYTES} byte discovery limit.`,
+          error: `Official source advertised ${advertisedLength} bytes, above the ${MAX_KNOWLEDGE_DOCUMENT_BYTES} byte discovery limit.`,
         }),
       };
     }
-    const body = await response.text();
-    const bodyBytes = Buffer.byteLength(body, "utf8");
+    const { text: body, bytes: bodyBytes } = await readKnowledgeResponseBody(response);
     const bodyHash = sha256(body);
-    if (bodyBytes > MAX_DISCOVERY_DOCUMENT_BYTES) {
-      return {
-        extraction: null,
-        receipt: receipt({
-          finalUrl,
-          httpStatus: response.status,
-          contentType,
-          bodyBytes,
-          bodyHash,
-          outcome: "oversize_document",
-          error: `Official source exceeded ${MAX_DISCOVERY_DOCUMENT_BYTES} byte discovery limit.`,
-        }),
-      };
-    }
     return {
       extraction: extractCandidates(source, body, observedAt, observations),
       receipt: receipt({
@@ -522,6 +520,20 @@ async function discoverFromSource(
       }),
     };
   } catch (error) {
+    if (error instanceof KnowledgeDocumentTooLargeError) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl: responseMetadata.finalUrl,
+          httpStatus: responseMetadata.httpStatus,
+          contentType: responseMetadata.contentType,
+          bodyBytes: error.bytesRead,
+          bodyHash: null,
+          outcome: "oversize_document",
+          error: `Official source exceeded ${MAX_KNOWLEDGE_DOCUMENT_BYTES} byte discovery limit.`,
+        }),
+      };
+    }
     return {
       extraction: null,
       receipt: receipt({

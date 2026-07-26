@@ -352,8 +352,8 @@ export function createOpenAIResponsesEvaluationBackend(
   const environment = options.env ?? process.env;
   const fetcher = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxInputBytes = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
+  const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new RangeError("OpenAI timeout must be a positive safe integer.");
   if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) throw new RangeError("OpenAI response limit must be a positive safe integer.");
@@ -514,6 +514,7 @@ export function createOpenAIBackend(options: OpenAIBackendOptions = {}) {
   const environment = options.env ?? process.env;
   const fetcher = options.fetch ?? globalThis.fetch;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxInputBytes = options.maxInputBytes ?? DEFAULT_MAX_INPUT_BYTES;
   const maxResponseBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
   return {
@@ -522,6 +523,9 @@ export function createOpenAIBackend(options: OpenAIBackendOptions = {}) {
     executable: "openai-responses",
     async runStructured<T>(request: StructuredRunRequest<T>): Promise<StructuredRunResult<T>> {
       if (options.allowExecution !== true) throw new LocalBackendError("target_only", "OpenAI execution is disabled by default; set allowExecution to true explicitly.", { backend: "openai" });
+      if (byteLength(request.prompt) > maxInputBytes) {
+        throw new LocalBackendError("input_too_large", `OpenAI structured request exceeds the ${maxInputBytes}-byte input limit.`, { backend: "openai" });
+      }
       const apiKey = resolveApiKey(environment);
       const timeout = timeoutSignal(request.signal, request.timeoutMs ?? timeoutMs);
       const startedAt = performance.now();

@@ -128,12 +128,13 @@ describe("parseArgs", () => {
   });
 
   it("requires the isolated OpenAI backend and explicit consent for live target evaluation", () => {
-    expect(parseArgs(["eval", "--mode=live", "--backend=openai", "--allow-execution"])).toMatchObject({
+    expect(parseArgs(["eval", "--mode=live", "--backend=openai", "--allow-execution", "--fixtures", "outputs.json"])).toMatchObject({
       name: "eval",
       packagePath: ".eib/package.json",
       mode: "live",
       depth: "default",
       backend: "openai",
+      fixtures: "outputs.json",
       allowExecution: true,
     });
     expect(() =>
@@ -152,6 +153,8 @@ describe("parseArgs", () => {
       "--backend",
       "codex",
       "--allow-execution",
+      "--fixtures",
+      "outputs.json",
       "--depth",
       "deep",
     ])).toMatchObject({
@@ -165,24 +168,30 @@ describe("parseArgs", () => {
     );
   });
 
-  it("accepts fixture files only for static evaluation", () => {
+  it("requires fixture files for external evaluation so static validation is fresh", () => {
     expect(parseArgs(["eval", "--fixtures", "outputs.json"])).toMatchObject({
       name: "eval",
       mode: "static",
       fixtures: "outputs.json",
     });
-    expect(() =>
-      parseArgs([
-        "eval",
-        "--mode",
-        "proxy",
-        "--backend",
-        "codex",
-        "--allow-execution",
-        "--fixtures",
-        "outputs.json",
-      ]),
-    ).toThrow("--fixtures is only valid for static evaluation");
+    expect(parseArgs([
+      "eval",
+      "--mode",
+      "proxy",
+      "--backend",
+      "codex",
+      "--allow-execution",
+      "--fixtures",
+      "outputs.json",
+    ])).toMatchObject({ mode: "proxy", fixtures: "outputs.json" });
+    expect(() => parseArgs([
+      "eval",
+      "--mode",
+      "proxy",
+      "--backend",
+      "codex",
+      "--allow-execution",
+    ])).toThrow("requires --fixtures");
   });
 
   it("requires complete local evidence and a new receipt destination for proof", () => {

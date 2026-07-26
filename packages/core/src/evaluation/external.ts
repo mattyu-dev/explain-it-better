@@ -10,8 +10,8 @@ import {
 import {
   advanceVerificationStatus,
   invalidateVerificationAt,
-  isVerificationAtLeast,
 } from "./verification.js";
+import { evaluateStatic } from "./static.js";
 
 export type ExternalEvaluationMode = "proxy" | "live";
 export type ExternalEvalResult = ReturnType<typeof EvalResultSchema.parse>;
@@ -30,6 +30,11 @@ export const PROMPT_QUALITY_EVALUATION_CONTRACT = Object.freeze([
 
 export interface ExternalEvaluationRequest {
   readonly mode: ExternalEvaluationMode;
+  /**
+   * Fixture outputs that the core boundary re-validates immediately before
+   * external execution. Imported result records are not evidence of a run.
+   */
+  readonly staticOutputs: Readonly<Record<string, string>>;
   readonly allowExecution?: boolean;
   readonly repetitions?: 1 | 3 | 5;
   readonly signal?: AbortSignal;
@@ -70,6 +75,10 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
 }
 
 function canonicalJson(value: unknown): string {
@@ -134,17 +143,25 @@ export async function runExternalEvaluation(
   if (backend.id.trim().length === 0) {
     throw new Error("External evaluation backend id cannot be empty.");
   }
-  if (!isVerificationAtLeast(validatedPackage.verification, "statically_validated")) {
-    throw new Error("Static validation must pass before proxy or live evaluation.");
+  if (!isStringRecord(request.staticOutputs)) {
+    throw new Error("External evaluation requires fixture outputs keyed by evaluation case id.");
   }
+  // Never use serialized result records or a verification label from an
+  // imported package as an execution gate. Re-run the deterministic validator
+  // over caller-supplied fixture outputs at this boundary instead.
+  const staticReport = evaluateStatic(validatedPackage, request.staticOutputs);
+  if (!staticReport.passed) {
+    throw new Error("External evaluation requires a fresh passing static validation run.");
+  }
+  const staticValidatedPackage = staticReport.promptPackage;
   throwIfAborted(request.signal);
 
   const repetitions = request.repetitions ?? 3;
   if (repetitions !== 1 && repetitions !== 3 && repetitions !== 5) {
     throw new Error("Evaluation repetitions must be 1, 3, or 5.");
   }
-  const expectedCaseIds = new Set(validatedPackage.evals.map((evalCase) => evalCase.id));
-  const expectedTargetIds = new Set(validatedPackage.artifacts.map((artifact) => artifact.targetId));
+  const expectedCaseIds = new Set(staticValidatedPackage.evals.map((evalCase) => evalCase.id));
+  const expectedTargetIds = new Set(staticValidatedPackage.artifacts.map((artifact) => artifact.targetId));
   const expectedPairs = new Set(
     [...expectedCaseIds].flatMap((caseId) =>
       [...expectedTargetIds].map((targetId) => `${caseId}\u0000${targetId}`),
@@ -153,7 +170,7 @@ export async function runExternalEvaluation(
   if (expectedCaseIds.size === 0 || expectedTargetIds.size === 0) {
     throw new Error("External evaluation requires evaluation cases and compiled targets.");
   }
-  const staticResults = validatedPackage.results.filter(
+  const staticResults = staticValidatedPackage.results.filter(
     (result) => result.mode === "static",
   );
   const passingStaticPairs = new Set(
@@ -172,7 +189,7 @@ export async function runExternalEvaluation(
   }
   const runId = randomUUID();
   const evaluatedAt = new Date().toISOString();
-  const evaluatedSubjectHash = subjectHash(validatedPackage);
+  const evaluatedSubjectHash = subjectHash(staticValidatedPackage);
   const results: ExternalEvalResult[] = [];
   for (let repetition = 0; repetition < repetitions; repetition += 1) {
     throwIfAborted(request.signal);
@@ -180,8 +197,8 @@ export async function runExternalEvaluation(
       mode: request.mode,
       focus: "prompt_quality",
       evaluationContract: PROMPT_QUALITY_EVALUATION_CONTRACT,
-      promptPackage: validatedPackage,
-      evalCases: validatedPackage.evals,
+      promptPackage: staticValidatedPackage,
+      evalCases: staticValidatedPackage.evals,
       repetition,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     };
@@ -233,7 +250,7 @@ export async function runExternalEvaluation(
     }
   }
 
-  const expectedResultCount = validatedPackage.evals.length * expectedTargetIds.size * repetitions;
+  const expectedResultCount = staticValidatedPackage.evals.length * expectedTargetIds.size * repetitions;
   if (results.length !== expectedResultCount) {
     throw new Error(
       `Backend ${JSON.stringify(backend.id)} returned ${results.length} results; expected ${expectedResultCount}.`,
@@ -241,12 +258,12 @@ export async function runExternalEvaluation(
   }
 
   const passed = results.every((result) => result.passed);
-  const retainedResults = validatedPackage.results.filter((result) => result.mode !== request.mode);
+  const retainedResults = staticValidatedPackage.results.filter((result) => result.mode !== request.mode);
   const verification = passed
-    ? advanceVerificationStatus(validatedPackage.verification, requiredVerification(request.mode))
-    : invalidateVerificationAt(validatedPackage.verification, requiredVerification(request.mode));
+    ? advanceVerificationStatus(staticValidatedPackage.verification, requiredVerification(request.mode))
+    : invalidateVerificationAt(staticValidatedPackage.verification, requiredVerification(request.mode));
   const nextPackage = PromptPackageSchema.parse({
-    ...validatedPackage,
+    ...staticValidatedPackage,
     results: [...retainedResults, ...results],
     verification,
   });
