@@ -26,10 +26,16 @@ scope, structure, or improve a task before starting work.
 
 ### Install for your Claude Code user
 
-Use Claude Code's plugin UI or add a marketplace that distributes this exact
-plugin, then install `explain-it-better` at the desired scope. The standard
-supported development path above requires no marketplace and is the fastest way
-to verify the bundle.
+Install from the public marketplace:
+
+```bash
+claude plugin marketplace add mattyu-dev/explain-it-better
+claude plugin install explain-it-better@explain-it-better
+```
+
+Use `--scope project` or `--scope local` on the install command when you do
+not want the default user-wide installation. The development path above
+requires no marketplace and is the fastest way to verify the bundle.
 
 To create a portable archive for Claude Code 2.1.128 or later, zip the
 `explain-it-better` directory itself and test it before distributing:
@@ -65,12 +71,14 @@ Run both checks from the repository root:
 ```bash
 node claude-plugin/explain-it-better/scripts/validate.mjs
 claude plugin validate ./claude-plugin/explain-it-better
+claude plugin validate .
 ```
 
 The first is a dependency-free structural guard included in this bundle. The
 second is Claude Code's authoritative plugin/schema validator. To smoke-test
 runtime discovery, start Claude with `--plugin-dir` and verify that
 `/explain-it-better:explain-it-better` appears in `/help`.
+The final check validates the repository-root public marketplace catalog.
 
 ## Compatibility and limits
 

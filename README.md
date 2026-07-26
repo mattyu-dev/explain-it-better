@@ -33,18 +33,23 @@ material unknowns, show assumptions, wait for confirmation, then proceed. Do
 not claim a host supports local repository analysis unless that host actually
 provides it.
 
-For local development, install the Codex/ChatGPT plugin through the included
-marketplace and verify that it is recognized:
+Install from the public marketplaces—no clone or shell is required for the
+core Skill:
 
 ```bash
-codex plugin marketplace add .
+# Codex / ChatGPT Codex
+codex plugin marketplace add mattyu-dev/explain-it-better
 codex plugin add explain-it-better@explain-it-better
-codex plugin list
+
+# Claude Code
+claude plugin marketplace add mattyu-dev/explain-it-better
+claude plugin install explain-it-better@explain-it-better
 ```
 
-For Claude Code, use the development command in the
-[Claude plugin README](claude-plugin/explain-it-better/README.md). Start a new
-conversation after installation so the host can discover the Skill.
+Start a new conversation after installation so the host can discover the
+Skill. For development or offline testing, add the checkout itself as the
+marketplace source (`codex plugin marketplace add .` or
+`claude plugin marketplace add .`).
 
 ## Power mode: local project integration
 

@@ -1,0 +1,26 @@
+{
+  "name": "explain-it-better",
+  "owner": {
+    "name": "Matt"
+  },
+  "description": "Portable confirmation-gated planning skills for Claude Code.",
+  "version": "0.2.1",
+  "plugins": [
+    {
+      "name": "explain-it-better",
+      "source": "./claude-plugin/explain-it-better",
+      "description": "Turn rough requests into clear, confirmation-gated execution briefs.",
+      "version": "0.2.1",
+      "author": {
+        "name": "Matt"
+      },
+      "category": "productivity",
+      "tags": [
+        "planning",
+        "requirements",
+        "briefs",
+        "clarification"
+      ]
+    }
+  ]
+}

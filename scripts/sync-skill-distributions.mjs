@@ -68,6 +68,15 @@ if (checkOnly) {
   if (entry?.source?.path !== "./plugins/explain-it-better") {
     throw new Error("The local marketplace must point to the Explain It Better plugin source.");
   }
+  const claudePlugin = JSON.parse(await readFile(resolve(root, "claude-plugin/explain-it-better/.claude-plugin/plugin.json"), "utf8"));
+  const claudeMarketplace = JSON.parse(await readFile(resolve(root, ".claude-plugin/marketplace.json"), "utf8"));
+  const claudeEntry = claudeMarketplace.plugins?.find((item) => item.name === "explain-it-better");
+  if (claudeMarketplace.name !== "explain-it-better" || claudeEntry?.source !== "./claude-plugin/explain-it-better") {
+    throw new Error("The public Claude marketplace must expose the standalone Explain It Better plugin.");
+  }
+  if (claudeMarketplace.version !== claudePlugin.version || claudeEntry.version !== claudePlugin.version) {
+    throw new Error("The public Claude marketplace and its plugin must share one release version.");
+  }
 }
 
 process.stdout.write(`Explain It Better skill distributions ${checkOnly ? "verified" : "synchronized"}.\n`);
