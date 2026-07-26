@@ -190,6 +190,10 @@ export type KnowledgeStage = z.infer<typeof KnowledgeStageSchema>;
 export interface KnowledgeFetchResponse {
   readonly ok: boolean;
   readonly status: number;
+  /** Final URL after redirects, when the fetch implementation exposes it. */
+  readonly url?: string;
+  /** Optional to keep deterministic test fetchers small. */
+  readonly headers?: { get(name: string): string | null };
   text(): Promise<string>;
 }
 
@@ -208,6 +212,110 @@ export interface KnowledgeCheckOptions {
 export interface KnowledgeStageOptions {
   readonly report: KnowledgeCheckReport;
   readonly stagedAt?: string;
+}
+
+/**
+ * An official provider page used only to discover potential catalog changes.
+ * Unlike `SourceManifestEntry`, this is not an approved source for a rule.
+ */
+export const OfficialDiscoverySourceSchema = z.object({
+  id: z.string().min(1),
+  provider: TargetProfileSchema.shape.provider,
+  title: z.string().min(1),
+  url: z.url(),
+  kind: z.enum(["model_catalog", "release_notes"]),
+});
+export type OfficialDiscoverySource = z.infer<
+  typeof OfficialDiscoverySourceSchema
+>;
+
+/** A possible model or surface observed in an official provider document. */
+const KnowledgeDiscoveryCandidateEvidenceSchema = z.object({
+  provider: TargetProfileSchema.shape.provider,
+  sourceId: z.string().min(1),
+  url: z.url(),
+  evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+  observedAt: z.iso.datetime(),
+  evidenceExcerpt: z.string().min(1).max(280),
+  // Discovery is deliberately weaker than a reviewed source or a staged rule.
+  // It cannot be selected as a profile or rule input.
+  reviewStatus: z.literal("discovered_unreviewed"),
+});
+export const KnowledgeDiscoveryCandidateSchema = z.discriminatedUnion("kind", [
+  KnowledgeDiscoveryCandidateEvidenceSchema.extend({
+    kind: z.literal("model"),
+    model: z.string().min(1),
+    surface: z.null(),
+  }),
+  KnowledgeDiscoveryCandidateEvidenceSchema.extend({
+    kind: z.literal("surface"),
+    model: z.null(),
+    surface: TargetProfileSchema.shape.surface,
+  }),
+]);
+export type KnowledgeDiscoveryCandidate = z.infer<
+  typeof KnowledgeDiscoveryCandidateSchema
+>;
+
+/**
+ * A human-reviewed discovery observation. It suppresses repeat alerts but is
+ * not a target profile, capability declaration, or activation mechanism.
+ */
+const KnowledgeDiscoveryObservationBaseSchema = z.object({
+  provider: TargetProfileSchema.shape.provider,
+  classification: z.enum(["known_non_target", "rejected", "promoted"]),
+  reviewedAt: z.iso.datetime(),
+  rationale: z.string().min(12),
+});
+export const KnowledgeDiscoveryObservationSchema = z.discriminatedUnion("kind", [
+  KnowledgeDiscoveryObservationBaseSchema.extend({
+    kind: z.literal("model"),
+    model: z.string().min(1),
+    surface: z.null(),
+  }),
+  KnowledgeDiscoveryObservationBaseSchema.extend({
+    kind: z.literal("surface"),
+    model: z.null(),
+    surface: TargetProfileSchema.shape.surface,
+  }),
+]);
+export type KnowledgeDiscoveryObservation = z.infer<
+  typeof KnowledgeDiscoveryObservationSchema
+>;
+
+export const KnowledgeDiscoveryReportSchema = z.object({
+  status: z.enum(["current", "candidates_detected", "incomplete"]),
+  candidates: z.array(KnowledgeDiscoveryCandidateSchema),
+  suppressedObservations: z.array(KnowledgeDiscoveryObservationSchema),
+  unavailableSourceIds: z.array(z.string().min(1)),
+});
+export type KnowledgeDiscoveryReport = z.infer<
+  typeof KnowledgeDiscoveryReportSchema
+>;
+
+/**
+ * Proposal-only refresh result. It intentionally has no activation path, rule
+ * payload, or inferred capability fields: promotion requires separate review.
+ */
+export const KnowledgeRefreshReportSchema = z.object({
+  packVersion: z.string().min(1),
+  refreshedAt: z.iso.datetime(),
+  activation: z.literal("blocked_pending_review"),
+  sourceCheck: KnowledgeCheckReportSchema,
+  discovery: KnowledgeDiscoveryReportSchema,
+  affectedTargetIds: z.array(z.string().min(1)),
+  promotion: z.object({
+    status: z.literal("pending_review"),
+    reasons: z.array(z.string().min(1)).min(1),
+  }),
+});
+export type KnowledgeRefreshReport = z.infer<typeof KnowledgeRefreshReportSchema>;
+
+export interface KnowledgeRefreshOptions extends KnowledgeCheckOptions {
+  /** ISO time used for evidence provenance and deterministic tests. */
+  readonly discoveredAt?: string;
+  /** Reviewed catalog observations used to suppress repeat proposal alerts. */
+  readonly reviewedObservations?: readonly KnowledgeDiscoveryObservation[];
 }
 
 export interface TargetProfileFilter {

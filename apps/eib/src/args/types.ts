@@ -118,7 +118,8 @@ export type CliCommand =
   | {
       name: "knowledge";
       global: GlobalOptions;
-      action: "check" | "stage";
+      /** `refresh` produces a review proposal only; it never activates rules. */
+      action: "check" | "stage" | "refresh";
       output?: string;
       sourceIds: string[];
     }

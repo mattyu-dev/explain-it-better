@@ -171,7 +171,7 @@ eib eval [package] --mode live --backend openai --allow-execution
          [--depth quick|default|deep]
 eib export [package] --format clipboard|directory [--output <directory>]
 eib doctor
-eib knowledge check|stage
+eib knowledge check|stage|refresh
 ```
 
 Every non-interactive command supports `--json`. Exit codes are stable:
@@ -285,7 +285,28 @@ profile IDs in the target selector.
 Knowledge rules are small, source-traceable, and reviewed. Each records its
 source URL, date, hash, confidence, conflicts, and executable conformance
 expectation. `eib knowledge check` reports source drift; `eib knowledge stage`
-writes a review artifact only, never activating changed rules automatically.
+writes a hash-review artifact; and `eib knowledge refresh` combines drift
+checks with an official provider catalog/release scan. Every result is a
+non-active proposal: it never activates changed rules automatically.
+
+### Scheduled knowledge refresh
+
+GitHub Actions runs **Knowledge refresh** weekly and can also be run manually.
+It checks reviewed official sources, scans allowlisted official provider
+catalogs/release pages for model or surface candidates, writes
+`knowledge-refresh.json`, then runs the complete release gate against the
+current pack. The workflow has read-only repository permissions: it cannot
+alter rules, commit, push, open a pull request, or make model calls.
+
+Changed, unavailable, or newly observed evidence deliberately fails the run
+after the artifact is uploaded. Candidates are always
+`discovered_unreviewed`: EIB never infers capabilities, creates profiles, or
+makes them runtime-selectable from remote content. A reviewer can classify a
+previously observed non-target candidate in the checked-in observation
+inventory to suppress repeat alerts; that classification is also non-active.
+Promoting a model still requires a source-backed profile/rule change, complete
+conformance and regression evaluation, a reviewed pull request, and normal
+green CI.
 
 ## Trust boundaries
 

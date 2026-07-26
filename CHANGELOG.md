@@ -23,6 +23,11 @@ use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Documented native OpenAI evaluation: complete static evidence first, then
   explicit `eval --mode live --backend openai --allow-execution` target and
   separate structured-judge runs with bounded evidence scope.
+- Fail-closed knowledge refresh: `eib knowledge refresh` combines reviewed
+  source-drift checks with allowlisted official provider catalog/release scans,
+  producing evidence-only `discovered_unreviewed` candidates and a non-active
+  proposal. A weekly read-only workflow uploads that evidence, runs the
+  release gate, and requires human review for any drift, outage, or candidate.
 
 ### Changed
 

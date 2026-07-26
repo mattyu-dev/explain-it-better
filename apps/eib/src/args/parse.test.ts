@@ -3,6 +3,26 @@ import { parseArgs } from "./parse.js";
 import { UsageError } from "./types.js";
 
 describe("parseArgs", () => {
+  it("parses a proposal-only knowledge refresh", () => {
+    expect(parseArgs([
+      "knowledge",
+      "refresh",
+      "--source",
+      "openai-codex-docs",
+      "--output",
+      "review.json",
+    ])).toEqual({
+      name: "knowledge",
+      global: { json: false },
+      action: "refresh",
+      sourceIds: ["openai-codex-docs"],
+      output: "review.json",
+    });
+    expect(() => parseArgs(["knowledge", "activate"])).toThrow(
+      "knowledge requires check, stage, or refresh",
+    );
+  });
+
   it("opens the TUI without arguments", () => {
     expect(parseArgs([])).toEqual({ name: "tui", global: { json: false } });
   });

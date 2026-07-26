@@ -87,11 +87,11 @@ Options:
   doctor: `Usage: eib doctor [--json]
 
 Inspect local compiler backends without reading or storing credentials.`,
-  knowledge: `Usage: eib knowledge check|stage [options]
+  knowledge: `Usage: eib knowledge check|stage|refresh [options]
 
 Options:
   --source <id>           Limit source checks; repeat as needed
-  --output <path>         Write the staged review artifact
+  --output <path>         Write the non-active review/proposal artifact
   --json                  Emit one machine-readable JSON document`,
 };
 
@@ -114,7 +114,7 @@ Usage:
   eib export [package]             Export a paste-ready prompt package
   eib preferences show|set|unset   Manage credential-free CLI defaults
   eib doctor                       Inspect local evaluator readiness
-  eib knowledge check|stage        Review official-source drift
+  eib knowledge check|stage|refresh Review official-source drift and proposals
 
 Global options:
   --json                           Machine-readable output (non-interactive only)

@@ -473,8 +473,8 @@ export function parseArgs(argv: readonly string[]): CliCommand {
     case "knowledge": {
       rejectOptions(parsed, ["output", "source"], []);
       const action = parsed.positionals.shift();
-      if (action !== "check" && action !== "stage") {
-        throw new UsageError("knowledge requires check or stage");
+      if (action !== "check" && action !== "stage" && action !== "refresh") {
+        throw new UsageError("knowledge requires check, stage, or refresh");
       }
       if (parsed.positionals.length !== 0) {
         throw new UsageError(`knowledge ${action} does not accept positional arguments`);

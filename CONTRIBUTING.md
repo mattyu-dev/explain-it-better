@@ -45,8 +45,12 @@ It does not publish packages.
 - Add or update tests for behavioral changes. Do not lower coverage thresholds
   to make a change pass.
 - Keep provider and knowledge-pack assertions traceable to reviewed source
-  material. `eib knowledge stage` is review-only; it never activates changed
-  rules automatically.
+  material. `eib knowledge stage` and `eib knowledge refresh` are review-only;
+  neither can activate rules, profiles, capabilities, or discovered models.
+- Treat a scheduled knowledge-refresh artifact as evidence, not an update.
+  The workflow is deliberately read-only; source drift or an unavailable
+  source must be investigated and promoted through a reviewed pull request
+  with the normal release gate.
 - Do not commit credentials, generated `.eib/` packages, `dist/`, coverage,
   or `node_modules/`.
 

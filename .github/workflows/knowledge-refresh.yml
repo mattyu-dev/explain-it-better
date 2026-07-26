@@ -1,0 +1,105 @@
+name: Knowledge refresh
+
+on:
+  schedule:
+    # Weekly, outside the normal contributor workday. The workflow only
+    # gathers evidence and stages a review artifact; it never changes the
+    # reviewed knowledge pack or opens a pull request.
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: knowledge-refresh-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# This is deliberately read-only. A refresh may identify drift, but a human
+# must review a source-backed code change before the pack can be promoted.
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Check and stage knowledge review (Node 22)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - id: knowledge
+        name: Refresh official-source and model-catalog evidence
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p knowledge-refresh
+
+          # `refresh` never changes active profiles, rules, or prompts. Keep
+          # collecting and validating evidence so the final report is
+          # actionable rather than failing at the first observed problem.
+          set +e
+          node apps/eib/dist/cli.js knowledge refresh \
+            --output knowledge-refresh/knowledge-refresh.json --json \
+            > knowledge-refresh/knowledge-refresh-command.json
+          refresh_exit=$?
+          set -e
+
+          node --input-type=module - \
+            knowledge-refresh/knowledge-refresh-command.json \
+            "$refresh_exit" <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const [refreshPath, refreshExit] = process.argv.slice(2);
+          const envelope = JSON.parse(readFileSync(refreshPath, "utf8"));
+          const proposal = envelope.data?.proposal;
+          if (envelope.command !== "knowledge" || proposal === undefined) {
+            throw new Error("Knowledge refresh did not produce the expected CLI proposal.");
+          }
+          const changed = proposal.sourceCheck.checks.filter((entry) => entry.status === "changed");
+          const unreachable = proposal.sourceCheck.checks.filter((entry) => entry.status === "unreachable");
+          const requiresReview =
+            proposal.sourceCheck.status !== "current" ||
+            proposal.discovery.status !== "current";
+          const summary = [
+            "## Knowledge refresh evidence",
+            "",
+            `- **Source status:** \`${proposal.sourceCheck.status}\``,
+            `- **Discovery status:** \`${proposal.discovery.status}\``,
+            `- **Reviewed pack:** \`${proposal.packVersion}\``,
+            `- **Changed sources:** ${changed.length}`,
+            `- **Unavailable sources:** ${unreachable.length}`,
+            `- **Unreviewed model/surface candidates:** ${proposal.discovery.candidates.length}`,
+            `- **Affected target profiles:** ${proposal.affectedTargetIds.length}`,
+            `- **Refresh exit:** \`${refreshExit}\``,
+            "",
+            "The uploaded artifacts are review evidence only. This workflow has read-only permissions and cannot modify the knowledge pack, commit, push, or create a pull request.",
+          ].join("\n");
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+          appendFileSync(process.env.GITHUB_OUTPUT, `requires_review=${requiresReview}\n`);
+          NODE
+
+      - name: Run release validation against the current reviewed pack
+        if: always()
+        run: npm run release:check
+
+      - name: Upload knowledge refresh evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: knowledge-refresh-${{ github.run_id }}
+          path: knowledge-refresh/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Require a reviewed knowledge proposal state
+        if: always()
+        env:
+          KNOWLEDGE_REQUIRES_REVIEW: ${{ steps.knowledge.outputs.requires_review }}
+        run: |
+          if [[ "$KNOWLEDGE_REQUIRES_REVIEW" != "false" ]]; then
+            echo "Knowledge refresh requires human review; active knowledge was not changed."
+            exit 1
+          fi

@@ -7,6 +7,103 @@ import { getRulesForProfile } from "@eib/knowledge";
 import { createCliServices } from "./services.js";
 
 describe("CLI services", () => {
+  it("writes a non-active knowledge refresh proposal without changing the active pack", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-knowledge-refresh-"));
+    const output = join(root, "proposal.json");
+    const receivedSourceIds: string[][] = [];
+    const services = createCliServices({
+      knowledgeRefresh: (options) => {
+        receivedSourceIds.push([...(options?.sourceIds ?? [])]);
+        return Promise.resolve({
+          packVersion: "test-pack",
+          refreshedAt: "2026-07-26T10:00:00.000Z",
+          activation: "blocked_pending_review",
+          sourceCheck: {
+            packVersion: "test-pack",
+            checkedAt: "2026-07-26T10:00:00.000Z",
+            status: "drift_detected",
+            checks: [],
+          },
+          discovery: {
+            status: "candidates_detected",
+            candidates: [{
+              kind: "model",
+              provider: "openai",
+              model: "gpt-next",
+              surface: null,
+              sourceId: "openai-codex-docs",
+              url: "https://example.test/docs",
+              evidenceHash: "a".repeat(64),
+              observedAt: "2026-07-26T10:00:00.000Z",
+              evidenceExcerpt: "New model gpt-next is available.",
+              reviewStatus: "discovered_unreviewed",
+            }],
+            suppressedObservations: [],
+            unavailableSourceIds: [],
+          },
+          affectedTargetIds: ["openai-gpt-5.6-api"],
+          promotion: {
+            status: "pending_review",
+            reasons: ["Candidate requires profile and rule review."],
+          },
+        } as never);
+      },
+    });
+    try {
+      const result = await services.execute(
+        {
+          name: "knowledge",
+          global: { json: true },
+          action: "refresh",
+          sourceIds: ["openai-codex-docs"],
+          output,
+        },
+        new AbortController().signal,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("non-active knowledge refresh proposal");
+      expect(result.message).toContain("Activation remains blocked");
+      expect(receivedSourceIds).toEqual([["openai-codex-docs"]]);
+      const saved = JSON.parse(await readFile(output, "utf8")) as { activation: string; discovery: { candidates: unknown[] } };
+      expect(saved.activation).toBe("blocked_pending_review");
+      expect(saved.discovery.candidates).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns a nonzero status for an incomplete refresh proposal", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-knowledge-incomplete-"));
+    try {
+      const services = createCliServices({
+        workspaceRoot: root,
+        knowledgeRefresh: () => Promise.resolve({
+          packVersion: "test-pack",
+          refreshedAt: "2026-07-26T10:00:00.000Z",
+          activation: "blocked_pending_review",
+          sourceCheck: { packVersion: "test-pack", checkedAt: "2026-07-26T10:00:00.000Z", status: "incomplete", checks: [] },
+          discovery: { status: "incomplete", candidates: [], suppressedObservations: [], unavailableSourceIds: ["openai-codex-docs"] },
+          affectedTargetIds: [],
+          promotion: { status: "pending_review", reasons: ["Source unavailable."] },
+        } as never),
+      });
+      const result = await services.execute(
+        {
+          name: "knowledge",
+          global: { json: true },
+          action: "refresh",
+          sourceIds: [],
+          output: join(root, "incomplete-proposal.json"),
+        },
+        new AbortController().signal,
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.data).toMatchObject({ proposal: { activation: "blocked_pending_review" } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("compiles an architecture request into a runtime-aware preview and requires confirmation", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-transform-"));
     await writeFile(join(root, "AGENTS.md"), "Run tests before changing source files.\n", "utf8");

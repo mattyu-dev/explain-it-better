@@ -42,6 +42,7 @@ import {
   getRulesForProfile,
   getTargetProfile,
   listTargetProfiles,
+  refreshKnowledgeUpdates,
   sourceManifest,
   stageKnowledgeUpdates,
   validateTargetConfiguration,
@@ -104,6 +105,11 @@ export interface CliServiceOptions {
   /** Injectable project root and runtime metadata keep transform deterministic in tests and adapters. */
   readonly workspaceRoot?: string;
   readonly runtimeEnvironment?: Readonly<Record<string, string | undefined>>;
+  /**
+   * Proposal-only refresh seam. Tests inject this so they never fetch external
+   * documentation; production uses the official-source implementation.
+   */
+  readonly knowledgeRefresh?: typeof refreshKnowledgeUpdates;
 }
 
 export class CliServiceError extends Error {
@@ -1615,6 +1621,34 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           };
         }
         case "knowledge": {
+          if (command.action === "refresh") {
+            const proposal = await abortable(
+              (options.knowledgeRefresh ?? refreshKnowledgeUpdates)({
+                ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),
+              }),
+              signal,
+            );
+            assertNotAborted(signal);
+            const defaultName = `refresh-${proposal.refreshedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`;
+            const output = command.output ?? join(".eib", "knowledge", defaultName);
+            const written = await writeJsonExclusive(output, proposal);
+            const candidateCount = proposal.discovery.candidates.length;
+            const affectedTargetCount = proposal.affectedTargetIds.length;
+            const incomplete =
+              proposal.sourceCheck.status === "incomplete" ||
+              proposal.discovery.unavailableSourceIds.length > 0;
+            return {
+              status: "ok",
+              message:
+                `Wrote a non-active knowledge refresh proposal at ${written} ` +
+                `(${candidateCount} discovered candidate${candidateCount === 1 ? "" : "s"}; ` +
+                `${affectedTargetCount} affected target${affectedTargetCount === 1 ? "" : "s"}). ` +
+                "Activation remains blocked pending source and rule review.",
+              data: { proposal, written },
+              // Partial source evidence is useful, but never promotable.
+              exitCode: incomplete ? Codes.error : Codes.success,
+            };
+          }
           const report = await abortable(
             checkKnowledgeSources({
               ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),

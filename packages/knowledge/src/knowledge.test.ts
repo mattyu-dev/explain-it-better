@@ -6,6 +6,8 @@ import {
   getRulesForProfile,
   getTargetProfile,
   knowledgeRules,
+  officialDiscoveryRegistry,
+  refreshKnowledgeUpdates,
   listTargetProfiles,
   ruleConformanceRegistry,
   runKnowledgeRuleConformance,
@@ -391,5 +393,138 @@ describe("knowledge drift workflow", () => {
         stagedAt: "2026-07-24T10:01:00.000Z",
       }).changes,
     ).toEqual([]);
+  });
+});
+
+describe("official knowledge discovery", () => {
+  it("covers every reviewed provider with an explicit official catalog or release source", () => {
+    expect(
+      new Set(officialDiscoveryRegistry.map((source) => source.provider)),
+    ).toEqual(
+      new Set([
+        "openai",
+        "anthropic",
+        "google",
+        "xai",
+        "deepseek",
+        "meta",
+        "mistral",
+        "kimi",
+        "hermes",
+      ]),
+    );
+    expect(
+      officialDiscoveryRegistry.every(
+        (source) =>
+          source.url.startsWith("https://") &&
+          ["provider_model_catalog", "provider_release_notes"].includes(
+            source.coverage,
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps source drift and a new official model candidate distinct and proposal-only", async () => {
+    const fetcher: KnowledgeFetcher = (url) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () =>
+          Promise.resolve(
+            url.includes("/models/")
+              ? "The GPT-9.1 model is now available in the official catalog."
+              : "GPT-5.6 reasoning effort prompt guidance changed upstream.",
+          ),
+      });
+    const refresh = await refreshKnowledgeUpdates({
+      fetcher,
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+      discoveredAt: "2026-07-26T10:00:00.000Z",
+    });
+
+    expect(refresh.activation).toBe("blocked_pending_review");
+    expect(refresh.promotion.status).toBe("pending_review");
+    expect(refresh.sourceCheck.status).toBe("drift_detected");
+    expect(refresh.discovery).toMatchObject({
+      status: "candidates_detected",
+      unavailableSourceIds: [],
+      candidates: [
+        {
+          kind: "model",
+          provider: "openai",
+          model: "gpt-9.1",
+          surface: null,
+          sourceId: "openai-model-catalog",
+          reviewStatus: "discovered_unreviewed",
+        },
+      ],
+    });
+    expect(refresh.affectedTargetIds).toContain("openai-gpt-5.6-api");
+    // Candidates are evidence, never implicit target profiles or capability claims.
+    expect(refresh.discovery.candidates[0]).not.toHaveProperty("capabilities");
+    expect(refresh.discovery.candidates[0]).not.toHaveProperty("rules");
+  });
+
+  it("does not rediscover an already reviewed model and fails closed on unreadable catalogs", async () => {
+    const knownFetcher: KnowledgeFetcher = (url) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(url.includes("/models/") ? "GPT-5.6" : "prompt"),
+      });
+    const known = await refreshKnowledgeUpdates({
+      fetcher: knownFetcher,
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+    expect(known.discovery.candidates).toEqual([]);
+
+    const suppressed = await refreshKnowledgeUpdates({
+      fetcher: () =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          text: () => Promise.resolve("GPT-9.1"),
+        }),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+      reviewedObservations: [
+        {
+          kind: "model",
+          provider: "openai",
+          model: "gpt-9.1",
+          surface: null,
+          classification: "known_non_target",
+          reviewedAt: "2026-07-26T10:01:00.000Z",
+          rationale: "Tracked as an API-only catalog model outside current scope.",
+        },
+      ],
+    });
+    expect(suppressed.discovery.candidates).toEqual([]);
+    expect(suppressed.discovery.suppressedObservations).toMatchObject([
+      { model: "gpt-9.1", classification: "known_non_target" },
+    ]);
+
+    const unreadableFetcher: KnowledgeFetcher = (url) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: {
+          get: () => (url.includes("/models/") ? "application/pdf" : "text/plain"),
+        },
+        text: () => Promise.resolve("not used for the catalog"),
+      });
+    const unreadable = await refreshKnowledgeUpdates({
+      fetcher: unreadableFetcher,
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+    expect(unreadable.discovery).toEqual({
+      status: "incomplete",
+      candidates: [],
+      suppressedObservations: [],
+      unavailableSourceIds: ["openai-model-catalog"],
+    });
   });
 });
