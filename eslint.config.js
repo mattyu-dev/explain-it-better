@@ -10,6 +10,7 @@ export default tseslint.config(
       "**/.eib/**",
       "examples/**/*.mjs",
       "scripts/**/*.mjs",
+      "claude-plugin/**/*.mjs",
       "eslint.config.js",
       "vitest.config.ts",
     ],

@@ -1,10 +1,32 @@
 # Changelog
 
-All notable changes to this private repository are documented here. The format
-follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions
-use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to this repository are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-07-26
+
+### Added
+
+- A canonical, zero-dependency `explain-it-better` Agent Skill that turns rough
+  requests into confirmation-gated execution briefs in any compatible host.
+- Skills-only Codex/ChatGPT plugin, a separately validated Claude Code plugin,
+  and a local Codex marketplace definition for installation testing.
+- Generated-distribution guard: the CLI bundle and both host adapters must
+  exactly match the canonical Skill during the release gate.
+- Optional `eib-mcp` stdio server for Power-mode hosts that need target-aware
+  local preparation and confirmation handoff tools.
+
+### Changed
+
+- Made the portable Skill the product default. CLI, repository context,
+  target-aware rendering, evaluation, and MCP are explicit optional Power-mode
+  capabilities rather than requirements for ordinary use.
+- Updated `eib install` to place the portable Skill in generic `.agents`,
+  Codex, and Claude project skill directories without modifying user-owned
+  instruction files.
 
 ### Added
 

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "explain-it-better",
+  "displayName": "Explain It Better",
+  "version": "0.2.0",
+  "description": "Turn rough requests into a clear, confirmation-gated brief before work begins.",
+  "author": {
+    "name": "Matt"
+  },
+  "homepage": "https://github.com/mattyu-dev/explain-it-better",
+  "repository": "https://github.com/mattyu-dev/explain-it-better",
+  "license": "Apache-2.0",
+  "keywords": [
+    "briefing",
+    "planning",
+    "clarification",
+    "scoping"
+  ]
+}

@@ -1,16 +1,18 @@
 {
   "name": "@eib/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "eib": "./dist/cli.js"
+    "eib": "./dist/cli.js",
+    "eib-mcp": "./dist/mcp.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "skills",
     "!dist/**/*.test.*",
     "!dist/.tsbuildinfo"
   ],
@@ -21,8 +23,8 @@
     "test": "vitest run --root ../.. apps/eib/src"
   },
   "dependencies": {
-    "@eib/core": "0.1.0",
-    "@eib/knowledge": "0.1.0",
+    "@eib/core": "0.2.0",
+    "@eib/knowledge": "0.2.0",
     "ink": "^7.0.0",
     "react": "^19.2.0",
     "zod": "^4.0.0"

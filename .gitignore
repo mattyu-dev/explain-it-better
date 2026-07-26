@@ -5,3 +5,9 @@ dist/
 .eib/
 coverage/
 *.log
+.eibrc.json
+.agents/skills/
+.codex/skills/
+.claude/skills/
+.claude/commands/eib.md
+.claude/commands/eib-deep.md

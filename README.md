@@ -1,58 +1,87 @@
 # Explain It Better
 
-Explain It Better (`eib`) is a local, terminal-first runtime prompt compiler.
-It turns a human demand into a project-aware, target-specific agent brief for
-the AI that is currently running. Its output is an evidence bundle: a
-structured interpretation of the demand, target-specific prompt candidates, a
-task-specific held-out suite, and any evidence used to select a winner.
+Explain It Better is a portable, confirmation-gated Agent Skill. It turns a
+rough request into an agreed brief before work starts, then lets the same agent
+perform the confirmed task. The core Skill works without a shell, plugin tool,
+repository, network connection, or host-specific API.
 
 ```text
-human demand → structured intent → target-aware variants → demand-specific
-held-out evaluation → evidence-bound promotion → paste-ready export
+rough request → visible brief → explicit confirmation → same-agent handoff
 ```
 
-There is no universal “perfect prompt.” A prompt earns the **best-tested**
-label only for its frozen demand, target, and shared held-out evaluation set:
-it must show a measurable improvement over the baseline with no critical
-regression. The evidence is bound to the exact candidate prompt hash, target,
-and case suite. Static checks and proxy judgments are clearly labeled; neither
-is presented as proof of target-model quality.
+The optional **Power mode** adds the local `eib` CLI, target-aware rendering,
+safe project-context selection, reproducible packages, evaluation, and MCP
+tools. It is an enhancement, never a requirement for the core Skill.
 
-The reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI, DeepSeek,
-Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally excluded.
+Power mode's reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI,
+DeepSeek, Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally
+excluded.
 
-## Quick start
+## Install the Skill
+
+Use the canonical bundle at
+[`skills/explain-it-better`](skills/explain-it-better). It is the source for
+the Codex/ChatGPT plugin and the Claude Code plugin:
+
+```text
+ChatGPT/Codex: plugins/explain-it-better
+Claude Code:  claude-plugin/explain-it-better
+```
+
+Each bundle is self-contained and follows the same contract: clarify only
+material unknowns, show assumptions, wait for confirmation, then proceed. Do
+not claim a host supports local repository analysis unless that host actually
+provides it.
+
+For local development, install the Codex/ChatGPT plugin through the included
+marketplace and verify that it is recognized:
+
+```bash
+codex plugin marketplace add .
+codex plugin add explain-it-better@explain-it-better
+codex plugin list
+```
+
+For Claude Code, use the development command in the
+[Claude plugin README](claude-plugin/explain-it-better/README.md). Start a new
+conversation after installation so the host can discover the Skill.
+
+## Power mode: local project integration
 
 Requirements are Node.js 22+ and npm 10+.
 
 ```bash
 npm install
 npm run build
-node apps/eib/dist/cli.js
+npm link --workspace @eib/cli
 ```
 
-## Install and use in a project
-
-Install the project-local runtime assets once:
+`npm link` makes the `eib` and `eib-mcp` commands available in your interactive
+shell. Install EIB-owned local assets in a project:
 
 ```bash
 eib install
 ```
 
-This writes only EIB-owned assets: `.eibrc.json`, a Codex project skill, and
-Claude Code `/eib` and `/eib-deep` commands. It never overwrites `AGENTS.md`,
-`CLAUDE.md`, or another user-owned instruction file.
+This writes the portable Skill to `.agents/skills`, `.codex/skills`, and
+`.claude/skills`, plus optional `/eib` and `/eib-deep` Power-mode Claude Code
+commands. It never overwrites `AGENTS.md`, `CLAUDE.md`, or another user-owned
+instruction file.
 
-Codex exposes this as skill discovery; Claude Code exposes slash commands.
-Both are host-mediated: after confirmation, the host follows the returned
-brief. EIB does not claim to inject text into an active model session through
-an unavailable host API.
+### Compatibility
+
+| Surface | Core Skill | Power mode |
+| --- | --- | --- |
+| ChatGPT/Codex plugin | Yes | No local project access implied |
+| Claude Code plugin | Yes | Optional CLI commands |
+| Any local MCP host | Not required | `eib-mcp` stdio server |
+| Remote chat apps | Yes, where they support Skill import | Requires a separately hosted authenticated MCP service for engine tools |
 
 After upgrading EIB, run `eib install --update`. Every generated host asset is
 versioned and fingerprinted; EIB refreshes only assets whose fingerprint shows
 they were not edited locally, and reports modified assets it safely preserves.
 
-Then transform a natural request without choosing a target manually:
+For deterministic, target-aware local preparation, transform a natural request:
 
 ```bash
 eib transform "review the architecture and tell me what to update" --runtime auto
@@ -131,7 +160,7 @@ The runnable walkthrough in
 shows the full flow, including deterministic validation and the limits of
 proxy evidence.
 
-## The optimizer loop
+## Power-mode optimizer loop
 
 1. **Structure the demand.** EIB extracts the requested outcome, audience,
    deliverables, source inputs, hard constraints, exclusions, success criteria,
@@ -164,6 +193,7 @@ evaluation cases, scores, provenance, and verification report.
 ```text
 eib
 eib install [--update]
+eib-mcp
 eib transform [request] --runtime auto [--deep] [--for <target>]
 eib confirm <run-token>
 eib new [brief] [--target <id>] [--fast] [--output <directory>]

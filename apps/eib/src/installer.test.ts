@@ -6,17 +6,22 @@ import { describe, expect, it } from "vitest";
 import { installProjectRuntime } from "./installer.js";
 
 describe("project runtime installer", () => {
-  it("installs idempotent Codex and Claude assets without touching user instruction files", async () => {
+  it("installs portable skills plus optional power commands without touching user instruction files", async () => {
     const root = await mkdtemp(join(tmpdir(), "eib-install-"));
     await writeFile(join(root, "AGENTS.md"), "User-owned instructions\n");
     const installed = await installProjectRuntime(root);
     expect(installed.created).toEqual(expect.arrayContaining([
       ".eibrc.json",
+      ".agents/skills/explain-it-better/SKILL.md",
       ".codex/skills/explain-it-better/SKILL.md",
+      ".claude/skills/explain-it-better/SKILL.md",
       ".claude/commands/eib.md",
       ".claude/commands/eib-deep.md",
     ]));
     await expect(readFile(join(root, "AGENTS.md"), "utf8")).resolves.toBe("User-owned instructions\n");
+    const portableSkill = await readFile(join(root, ".agents", "skills", "explain-it-better", "SKILL.md"), "utf8");
+    expect(portableSkill).toContain("No work has started");
+    expect(portableSkill).not.toMatch(/`eib(?:-mcp)?\b|eib_prepare|eib_confirm/u);
     await expect(installProjectRuntime(root)).resolves.toMatchObject({ created: [] });
   });
 
@@ -26,13 +31,13 @@ describe("project runtime installer", () => {
     const skillPath = join(root, ".codex", "skills", "explain-it-better", "SKILL.md");
     const commandPath = join(root, ".claude", "commands", "eib.md");
     const installedSkill = await readFile(skillPath, "utf8");
-    expect(installedSkill).toMatch(/EIB-ASSET: codex-skill; VERSION: 2; SHA256: [a-f0-9]{64}/);
+    expect(installedSkill).toMatch(/EIB-ASSET: codex-skill; VERSION: 3; SHA256: [a-f0-9]{64}/);
 
     const alteredBody = installedSkill.replace("# Explain It Better", "# Explain It Better (old generated asset)");
     const withoutHash = alteredBody.replace(/SHA256: [a-f0-9]{64}/, "SHA256: pending");
     const body = withoutHash
       .replace(/# Managed by Explain It Better\.\n/, "")
-      .replace(/# EIB-ASSET: codex-skill; VERSION: 2; SHA256: pending\n/, "");
+      .replace(/# EIB-ASSET: codex-skill; VERSION: 3; SHA256: pending\n/, "");
     const verifiedOldAsset = withoutHash.replace(
       "SHA256: pending",
       `SHA256: ${createHash("sha256").update(body).digest("hex")}`,

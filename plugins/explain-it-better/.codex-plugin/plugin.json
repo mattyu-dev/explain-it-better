@@ -1,0 +1,31 @@
+{
+  "name": "explain-it-better",
+  "version": "0.2.0",
+  "description": "A standalone skill that turns rough requests into confirmation-gated briefs before work begins.",
+  "author": {
+    "name": "Matt"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "planning",
+    "requirements",
+    "briefs",
+    "clarification"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Explain It Better",
+    "shortDescription": "Turn a rough request into a clear, approved brief.",
+    "longDescription": "Explain It Better is a self-contained planning skill. It turns a rough request into a clear brief, makes assumptions visible, and waits for approval before the agent starts the work.",
+    "developerName": "Matt",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Use Explain It Better to prepare my request before work begins.",
+      "Turn this rough idea into a clear brief and show me the assumptions.",
+      "Scope this project request, then wait for my approval."
+    ]
+  }
+}
