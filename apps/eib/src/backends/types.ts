@@ -5,6 +5,7 @@ export type BackendRole = "compiler" | "target_only";
 
 export type LocalBackendErrorCode =
   | "cancelled"
+  | "input_too_large"
   | "not_found"
   | "output_invalid"
   | "output_too_large"

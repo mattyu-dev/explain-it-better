@@ -72,7 +72,7 @@ Options:
   --mode static|proxy|live
   --depth quick|default|deep  Repetitions for proxy/live model evaluation
   --backend codex|claude|openai  Required evaluator; live mode requires openai
-  --fixtures <json-file>  Static outputs keyed by every evaluation case ID
+  --fixtures <json-file>  Static outputs keyed by every evaluation case ID (required for proxy/live)
   --allow-execution       Explicit consent required before any model run
   --json                  Emit one machine-readable JSON document`,
   prove: `Usage: eib prove [package] --fixtures <json-file> --output <relative-receipt.json> [--json]

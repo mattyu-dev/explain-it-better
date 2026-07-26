@@ -390,9 +390,6 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       if (modeValue === "proxy" && (backend === undefined || backend === "openai")) {
         throw new UsageError("proxy evaluation requires --backend codex|claude");
       }
-      if (modeValue !== "static" && fixtures !== undefined) {
-        throw new UsageError("--fixtures is only valid for static evaluation");
-      }
       if (modeValue === "static" && backend !== undefined) {
         throw new UsageError("--backend is only valid for proxy or live evaluation");
       }
@@ -407,6 +404,9 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       }
       if (modeValue === "live" && !parsed.flags.has("allow-execution")) {
         throw new UsageError("live evaluation requires explicit --allow-execution");
+      }
+      if (modeValue !== "static" && fixtures === undefined) {
+        throw new UsageError("proxy or live evaluation requires --fixtures <json-file> for fresh static validation");
       }
       return {
         name: "eval",

@@ -12,6 +12,38 @@ interface ClarificationView {
   readonly recommendedAssumption: string;
 }
 
+interface CreatedPackageView {
+  readonly directory: string;
+  readonly packageFile: string;
+  readonly verification: string | undefined;
+  readonly target: string | undefined;
+}
+
+function createdPackageFrom(result: CliServiceResult): CreatedPackageView | undefined {
+  if (typeof result.data !== "object" || result.data === null) return undefined;
+  const data = result.data as Record<string, unknown>;
+  const written = data["written"];
+  const promptPackage = data["package"];
+  if (typeof written !== "object" || written === null) return undefined;
+  const candidate = written as Record<string, unknown>;
+  if (typeof candidate["directory"] !== "string" || typeof candidate["packageFile"] !== "string") {
+    return undefined;
+  }
+  const packageRecord = typeof promptPackage === "object" && promptPackage !== null
+    ? promptPackage as Record<string, unknown>
+    : undefined;
+  const artifacts = packageRecord?.["artifacts"];
+  const firstArtifact = Array.isArray(artifacts) && typeof artifacts[0] === "object" && artifacts[0] !== null
+    ? artifacts[0] as Record<string, unknown>
+    : undefined;
+  return {
+    directory: candidate["directory"],
+    packageFile: candidate["packageFile"],
+    verification: typeof packageRecord?.["verification"] === "string" ? packageRecord["verification"] : undefined,
+    target: typeof firstArtifact?.["targetId"] === "string" ? firstArtifact["targetId"] : undefined,
+  };
+}
+
 function clarificationFrom(result: CliServiceResult): ClarificationView | undefined {
   if (typeof result.data !== "object" || result.data === null) {
     return undefined;
@@ -216,11 +248,22 @@ export function NewWizard({ services, signal, onCancel, onBack }: NewWizardProps
   }
 
   if (result !== undefined) {
+    const createdPackage = createdPackageFrom(result);
     return (
       <Box flexDirection="column">
         <Text bold color={result.exitCode === 0 ? "green" : "yellow"}>
           {result.message}
         </Text>
+        {createdPackage !== undefined && (
+          <>
+            <Text>Package: {createdPackage.directory}</Text>
+            <Text dimColor>Prompt package: {createdPackage.packageFile}</Text>
+            {createdPackage.target !== undefined && <Text dimColor>Target: {createdPackage.target}</Text>}
+            {createdPackage.verification !== undefined && <Text dimColor>Evidence level: {createdPackage.verification}</Text>}
+            <Text dimColor>Next: eib eval {createdPackage.directory} --mode static --fixtures &lt;fixtures.json&gt;</Text>
+            <Text dimColor>Then: eib optimize {createdPackage.directory} · eib export {createdPackage.directory} --format clipboard</Text>
+          </>
+        )}
         <Text dimColor>Verification labels report evidence level, not universal perfection.</Text>
         <Text dimColor>Press q or Esc to return.</Text>
       </Box>

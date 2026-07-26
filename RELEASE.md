@@ -34,7 +34,9 @@ appropriate GitHub Release), never an implied `npm publish` operation.
    every generated copy exactly matches the canonical Core Skill.
 5. Run `npm link --workspace @eib/cli` and verify both commands resolve in a
    fresh interactive shell: `eib --version` and `eib-mcp`.
-6. Validate the host adapters: `python3` skill/plugin validators for Codex and
+6. Validate the host adapters with the checked-in commands:
+   `npm run skills:check`,
+   `node claude-plugin/explain-it-better/scripts/validate.mjs`, and
    `claude plugin validate ./claude-plugin/explain-it-better` for Claude Code.
 7. Install the local Codex marketplace once and confirm `codex plugin list`
    exposes `explain-it-better` without an MCP dependency.

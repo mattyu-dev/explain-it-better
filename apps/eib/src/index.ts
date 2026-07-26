@@ -1,5 +1,5 @@
 export { runCli, type CliIo } from "./cli.js";
-export { handleMcpRequest, runMcpServer, type McpServerOptions } from "./mcp.js";
+export { createMcpSession, handleMcpRequest, runMcpServer, type McpServerOptions, type McpSession } from "./mcp.js";
 export { parseArgs } from "./args/parse.js";
 export { renderHelp } from "./args/help.js";
 export { resolveAppDataPaths, type AppDataPaths } from "./app-data.js";

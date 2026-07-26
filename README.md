@@ -17,6 +17,19 @@ Power mode's reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI,
 DeepSeek, Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally
 excluded.
 
+## Start here
+
+Choose the smallest surface that solves your problem:
+
+- **Better-scoped request:** install the portable Skill, state your request,
+  review its visible brief, and explicitly confirm before work begins.
+- **Project-aware agent preparation:** install Power mode, run
+  `eib transform "your request"`, review the target and selected context, then
+  run `eib confirm <run-token>` only after approval.
+- **Prompt optimization with evidence:** use the advanced Power-mode workflow
+  (`new`, `eval`, `optimize`, `prove`, and `export`) described below. It is
+  optional and never changes the portable Skill contract.
+
 ## Install the Skill
 
 Use the canonical bundle at

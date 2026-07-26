@@ -8,7 +8,10 @@ import { pathToFileURL } from "node:url";
 import { EIB_VERSION } from "./args/types.js";
 import { createCliServices, type CliServices } from "./services.js";
 
-const MCP_PROTOCOL_VERSION = "2025-06-18";
+/** New clients negotiate the current protocol; retain the previous version for installed hosts. */
+const MCP_PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18"] as const;
+const DEFAULT_TOOL_TIMEOUT_MS = 120_000;
+const MAX_TOOL_TIMEOUT_MS = 300_000;
 
 interface JsonRpcRequest {
   readonly jsonrpc: "2.0";
@@ -27,6 +30,15 @@ export interface McpServerOptions {
   readonly root?: string;
   readonly servicesForRoot?: (root: string) => CliServices;
   readonly write?: (line: string) => void;
+  /**
+   * Bound a single tool request so a stalled backend cannot block the stdio
+   * connection indefinitely. Values are capped to retain this guarantee.
+   */
+  readonly toolTimeoutMs?: number;
+}
+
+export interface McpSession {
+  handle(value: unknown): Promise<Record<string, unknown> | undefined>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,12 +49,75 @@ function requestId(request: JsonRpcRequest): string | number | null {
   return request.id ?? null;
 }
 
+function isRequestId(value: unknown): value is string | number | null {
+  return value === null || typeof value === "string" || typeof value === "number";
+}
+
 function response(id: string | number | null, result: unknown): Record<string, unknown> {
   return { jsonrpc: "2.0", id, result };
 }
 
-function error(id: string | number | null, code: number, message: string): Record<string, unknown> {
-  return { jsonrpc: "2.0", id, error: { code, message } };
+function error(
+  id: string | number | null,
+  code: number,
+  message: string,
+  data?: Record<string, unknown>,
+): Record<string, unknown> {
+  return { jsonrpc: "2.0", id, error: { code, message, ...(data === undefined ? {} : { data }) } };
+}
+
+class McpRequestError extends Error {
+  constructor(readonly code: number, message: string) {
+    super(message);
+    this.name = "McpRequestError";
+  }
+}
+
+function toolTimeoutMs(options: McpServerOptions): number {
+  const configured = options.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+  if (!Number.isFinite(configured)) return DEFAULT_TOOL_TIMEOUT_MS;
+  return Math.min(Math.max(1, Math.floor(configured)), MAX_TOOL_TIMEOUT_MS);
+}
+
+/**
+ * Give backend work a cancellable signal and a hard response deadline. The
+ * race is deliberate: adapters are expected to honor AbortSignal, but a
+ * faulty adapter must not prevent the stdio server from processing later
+ * requests or cancellation notifications.
+ */
+async function runBoundedTool<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+): Promise<T> {
+  const controller = new AbortController();
+  let rejectControl: ((reason: McpRequestError) => void) | undefined;
+  const rejectWithCancellation = (): void => {
+    const cancellation = new McpRequestError(-32800, "MCP request was cancelled.");
+    controller.abort(cancellation);
+    rejectControl?.(cancellation);
+  };
+  const control = new Promise<never>((_resolve, reject) => {
+    rejectControl = reject;
+  });
+  const onParentAbort = (): void => rejectWithCancellation();
+  if (parentSignal.aborted) {
+    rejectWithCancellation();
+  } else {
+    parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  }
+  const timer = setTimeout(() => {
+    const timedOut = new McpRequestError(-32000, `MCP tool call timed out after ${timeoutMs}ms.`);
+    controller.abort(timedOut);
+    rejectControl?.(timedOut);
+  }, timeoutMs);
+  timer.unref();
+  try {
+    return await Promise.race([Promise.resolve().then(() => operation(controller.signal)), control]);
+  } finally {
+    clearTimeout(timer);
+    parentSignal.removeEventListener("abort", onParentAbort);
+  }
 }
 
 function stringParameter(params: Record<string, unknown>, name: string, required = false): string | undefined {
@@ -64,6 +139,27 @@ function booleanParameter(params: Record<string, unknown>, name: string): boolea
   return value;
 }
 
+function onlyKnownParameters(params: Record<string, unknown>, names: readonly string[]): void {
+  const unknown = Object.keys(params).filter((name) => !names.includes(name));
+  if (unknown.length > 0) {
+    throw new Error(`Unsupported tool parameter(s): ${unknown.map((name) => JSON.stringify(name)).join(", ")}.`);
+  }
+}
+
+function initializeResult(params: unknown): Record<string, unknown> {
+  if (!isRecord(params) || typeof params.protocolVersion !== "string") {
+    throw new Error("initialize requires a string protocolVersion.");
+  }
+  if (!MCP_PROTOCOL_VERSIONS.includes(params.protocolVersion as typeof MCP_PROTOCOL_VERSIONS[number])) {
+    throw new Error(`Unsupported MCP protocol version ${JSON.stringify(params.protocolVersion)}.`);
+  }
+  return {
+    protocolVersion: params.protocolVersion,
+    capabilities: { tools: { listChanged: false } },
+    serverInfo: { name: "explain-it-better", version: EIB_VERSION },
+  };
+}
+
 function toolDefinitions(): Record<string, unknown> {
   return {
     tools: [
@@ -80,6 +176,12 @@ function toolDefinitions(): Record<string, unknown> {
           required: ["request"],
           additionalProperties: false,
         },
+        outputSchema: {
+          type: "object",
+          properties: { status: { type: "string" }, message: { type: "string" }, data: {} },
+          required: ["status", "message"],
+          additionalProperties: false,
+        },
       },
       {
         name: "eib_confirm",
@@ -90,6 +192,12 @@ function toolDefinitions(): Record<string, unknown> {
             runToken: { type: "string", minLength: 1, description: "Token returned by eib_prepare." },
           },
           required: ["runToken"],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: "object",
+          properties: { status: { type: "string" }, message: { type: "string" }, data: {} },
+          required: ["status", "message"],
           additionalProperties: false,
         },
       },
@@ -113,35 +221,38 @@ function toolResult(result: Awaited<ReturnType<CliServices["execute"]>>): McpToo
 async function callTool(
   params: unknown,
   options: McpServerOptions,
+  signal: AbortSignal,
 ): Promise<McpToolResult> {
   if (!isRecord(params) || typeof params.name !== "string" || !isRecord(params.arguments)) {
     throw new Error("tools/call requires a tool name and object arguments.");
   }
-  if (Object.hasOwn(params.arguments, "workspaceRoot")) {
+  const toolArguments = params.arguments;
+  if (Object.hasOwn(toolArguments, "workspaceRoot")) {
     throw new Error("workspaceRoot is not accepted by MCP; launch the server with its approved workspace root.");
   }
   const root = realpathSync(resolve(options.root ?? process.cwd()));
   const services = (options.servicesForRoot ?? ((workspaceRoot) => createCliServices({ workspaceRoot })))(root);
-  const signal = new AbortController().signal;
   switch (params.name) {
     case "eib_prepare": {
-      const brief = stringParameter(params.arguments, "request", true)!;
-      const target = stringParameter(params.arguments, "target");
-      return toolResult(await services.execute({
+      onlyKnownParameters(toolArguments, ["request", "target", "deep"]);
+      const brief = stringParameter(toolArguments, "request", true)!;
+      const target = stringParameter(toolArguments, "target");
+      return toolResult(await runBoundedTool((toolSignal) => services.execute({
         name: "transform",
         global: { json: true },
         brief,
         runtime: "auto",
-        deep: booleanParameter(params.arguments, "deep"),
+        deep: booleanParameter(toolArguments, "deep"),
         ...(target === undefined ? {} : { explicitTarget: target }),
-      }, signal));
+      }, toolSignal), signal, toolTimeoutMs(options)));
     }
     case "eib_confirm":
-      return toolResult(await services.execute({
+      onlyKnownParameters(toolArguments, ["runToken"]);
+      return toolResult(await runBoundedTool((toolSignal) => services.execute({
         name: "confirm",
         global: { json: true },
-        token: stringParameter(params.arguments, "runToken", true)!,
-      }, signal));
+        token: stringParameter(toolArguments, "runToken", true)!,
+      }, toolSignal), signal, toolTimeoutMs(options)));
     default:
       throw new Error(`Unknown EIB tool ${JSON.stringify(params.name)}.`);
   }
@@ -150,6 +261,7 @@ async function callTool(
 export async function handleMcpRequest(
   value: unknown,
   options: McpServerOptions = {},
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<Record<string, unknown> | undefined> {
   if (!isRecord(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string") {
     return error(null, -32600, "Invalid JSON-RPC request.");
@@ -164,30 +276,78 @@ export async function handleMcpRequest(
   try {
     switch (request.method) {
       case "initialize":
-        return reply(response(id, {
-          protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "explain-it-better", version: EIB_VERSION },
-        }));
+        return reply(response(id, initializeResult(request.params)));
       case "notifications/initialized":
       case "notifications/cancelled":
         return undefined;
       case "tools/list":
         return reply(response(id, toolDefinitions()));
       case "tools/call":
-        return reply(response(id, await callTool(request.params, options)));
+        return reply(response(id, await callTool(request.params, options, signal)));
       default:
         return reply(error(id, -32601, `Method ${JSON.stringify(request.method)} is not supported.`));
     }
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
-    return reply(error(id, -32602, message));
+    return reply(error(id, caught instanceof McpRequestError ? caught.code : -32602, message));
   }
+}
+
+/**
+ * Stateful lifecycle gate for a single stdio connection. Use this in servers;
+ * `handleMcpRequest` remains a one-request helper for embedders and unit tests.
+ */
+export function createMcpSession(options: McpServerOptions = {}): McpSession {
+  let initialized = false;
+  const inFlight = new Map<string | number | null, AbortController>();
+  return {
+    async handle(value: unknown): Promise<Record<string, unknown> | undefined> {
+      if (!isRecord(value) || value.jsonrpc !== "2.0" || typeof value.method !== "string") {
+        return error(null, -32600, "Invalid JSON-RPC request.");
+      }
+      const request = value as unknown as JsonRpcRequest;
+      const id = requestId(request);
+      const notification = request.id === undefined;
+      const reply = (result: Record<string, unknown>): Record<string, unknown> | undefined => notification ? undefined : result;
+      if (request.method === "initialize") {
+        if (initialized) return reply(error(id, -32600, "MCP session is already initialized."));
+        try {
+          const result = initializeResult(request.params);
+          initialized = true;
+          return reply(response(id, result));
+        } catch (caught) {
+          return reply(error(id, -32602, caught instanceof Error ? caught.message : String(caught)));
+        }
+      }
+      if (request.method === "notifications/cancelled") {
+        const cancellationId = isRecord(request.params) ? request.params.requestId : undefined;
+        if (isRequestId(cancellationId)) inFlight.get(cancellationId)?.abort();
+        return undefined;
+      }
+      if (!initialized) {
+        return reply(error(id, -32002, "Initialize the MCP session before calling tools."));
+      }
+      if (request.method !== "tools/call" || notification || !isRequestId(request.id)) {
+        return handleMcpRequest(request, options);
+      }
+      if (inFlight.has(request.id)) {
+        return reply(error(request.id, -32600, "Duplicate JSON-RPC request id is already in flight."));
+      }
+      const controller = new AbortController();
+      inFlight.set(request.id, controller);
+      try {
+        return await handleMcpRequest(request, options, controller.signal);
+      } finally {
+        if (inFlight.get(request.id) === controller) inFlight.delete(request.id);
+      }
+    },
+  };
 }
 
 export async function runMcpServer(options: McpServerOptions = {}): Promise<void> {
   const write = options.write ?? ((line: string) => process.stdout.write(`${line}\n`));
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  const session = createMcpSession(options);
   for await (const line of input) {
     if (!line.trim()) continue;
     let parsed: unknown;
@@ -197,8 +357,14 @@ export async function runMcpServer(options: McpServerOptions = {}): Promise<void
       write(JSON.stringify(error(null, -32700, "Invalid JSON.")));
       continue;
     }
-    const result = await handleMcpRequest(parsed, options);
-    if (result !== undefined) write(JSON.stringify(result));
+    // Do not await tools: a client must be able to send a cancellation while
+    // an earlier backend call is still running. JSON-RPC permits responses to
+    // arrive out of order for concurrently processed requests.
+    void session.handle(parsed).then((result) => {
+      if (result !== undefined) write(JSON.stringify(result));
+    }).catch((caught: unknown) => {
+      write(JSON.stringify(error(null, -32603, caught instanceof Error ? caught.message : String(caught))));
+    });
   }
 }
 

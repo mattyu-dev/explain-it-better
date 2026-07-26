@@ -17,6 +17,7 @@ import {
 
 const PACKAGE_FILENAME = "prompt-package.json";
 const MANIFEST_FILENAME = ".eib-package-manifest.json";
+const UPDATE_FILENAME = ".eib-package-update.json";
 
 type Provenance = PromptPackage["prompt"]["demand"]["context"][number];
 
@@ -24,6 +25,21 @@ interface PackageFileManifest {
   readonly version: 1;
   readonly packageId: string;
   readonly files: Readonly<Record<string, string>>;
+}
+
+/**
+ * Durable intent for a multi-file package update. Writing the manifest last is
+ * normally sufficient for readers, but an interrupted update would otherwise
+ * leave new files owned by the old manifest and make the next update refuse to
+ * proceed. The journal lets a later write finish that exact update safely.
+ */
+interface PackageUpdateJournal {
+  readonly version: 1;
+  readonly packageId: string;
+  readonly previousManifest?: PackageFileManifest;
+  readonly files: Readonly<Record<string, string>>;
+  readonly staleManagedFiles: Readonly<Record<string, string>>;
+  readonly manifest: PackageFileManifest;
 }
 
 export interface WritePromptPackageOptions {
@@ -237,33 +253,128 @@ function assertSafePackageDestination(destination: string): string {
 async function readManifest(directory: string): Promise<PackageFileManifest | undefined> {
   const path = join(directory, MANIFEST_FILENAME);
   try {
-    const value: unknown = JSON.parse(await readFile(path, "utf8"));
+    await assertNoSymlinkPath(path);
+    return parseManifest(JSON.parse(await readFile(path, "utf8")), path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseManifest(value: unknown, path: string): PackageFileManifest {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.packageId !== "string" ||
+    !isRecord(value.files)
+  ) {
+    throw new Error(`Invalid package ownership manifest at ${JSON.stringify(path)}.`);
+  }
+  const seenPaths = new Set<string>();
+  for (const [relativePath, hash] of Object.entries(value.files)) {
+    const collisionKey = portablePathCollisionKey(relativePath);
     if (
-      typeof value !== "object" ||
-      value === null ||
-      (value as { version?: unknown }).version !== 1 ||
-      typeof (value as { packageId?: unknown }).packageId !== "string" ||
-      typeof (value as { files?: unknown }).files !== "object" ||
-      (value as { files?: unknown }).files === null
+      portableRelativePath(relativePath) !== relativePath ||
+      collisionKey === portablePathCollisionKey(MANIFEST_FILENAME) ||
+      collisionKey === portablePathCollisionKey(UPDATE_FILENAME) ||
+      seenPaths.has(collisionKey) ||
+      typeof hash !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(hash)
     ) {
-      throw new Error(`Invalid package ownership manifest at ${JSON.stringify(path)}.`);
+      throw new Error(`Invalid package ownership record for ${JSON.stringify(relativePath)}.`);
     }
-    const manifest = value as PackageFileManifest;
-    const seenPaths = new Set<string>();
-    for (const [relativePath, hash] of Object.entries(manifest.files)) {
-      const collisionKey = portablePathCollisionKey(relativePath);
-      if (
-        portableRelativePath(relativePath) !== relativePath ||
-        collisionKey === MANIFEST_FILENAME ||
-        seenPaths.has(collisionKey) ||
-        typeof hash !== "string" ||
-        !/^[a-f0-9]{64}$/u.test(hash)
-      ) {
-        throw new Error(`Invalid package ownership record for ${JSON.stringify(relativePath)}.`);
-      }
-      seenPaths.add(collisionKey);
+    seenPaths.add(collisionKey);
+  }
+  return {
+    version: 1,
+    packageId: value.packageId,
+    files: value.files as Record<string, string>,
+  };
+}
+
+function manifestsEqual(left: PackageFileManifest | undefined, right: PackageFileManifest | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.packageId !== right.packageId) return false;
+  const leftEntries = Object.entries(left.files);
+  const rightEntries = Object.entries(right.files);
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([path, hash]) => right.files[path] === hash)
+  );
+}
+
+function parseUpdateJournal(value: unknown, path: string): PackageUpdateJournal {
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.packageId !== "string" ||
+    !isRecord(value.files) ||
+    !isRecord(value.staleManagedFiles)
+  ) {
+    throw new Error(`Invalid pending package update at ${JSON.stringify(path)}.`);
+  }
+  const manifest = parseManifest(value.manifest, path);
+  const previousManifest =
+    value.previousManifest === undefined ? undefined : parseManifest(value.previousManifest, path);
+  if (
+    value.packageId !== manifest.packageId ||
+    (previousManifest !== undefined && previousManifest.packageId !== value.packageId)
+  ) {
+    throw new Error(`Invalid pending package update at ${JSON.stringify(path)}.`);
+  }
+  const files = value.files;
+  const staleManagedFiles = value.staleManagedFiles;
+  const filePaths = Object.keys(files);
+  const manifestPaths = Object.keys(manifest.files);
+  const seenPaths = new Set<string>();
+  if (filePaths.length !== manifestPaths.length) {
+    throw new Error(`Invalid pending package update at ${JSON.stringify(path)}.`);
+  }
+  for (const relativePath of filePaths) {
+    const collisionKey = portablePathCollisionKey(relativePath);
+    const content = files[relativePath];
+    if (
+      portableRelativePath(relativePath) !== relativePath ||
+      seenPaths.has(collisionKey) ||
+      typeof content !== "string" ||
+      manifest.files[relativePath] !== sha256(content)
+    ) {
+      throw new Error(`Invalid pending package update at ${JSON.stringify(path)}.`);
     }
-    return manifest;
+    seenPaths.add(collisionKey);
+  }
+  for (const [relativePath, hash] of Object.entries(staleManagedFiles)) {
+    const collisionKey = portablePathCollisionKey(relativePath);
+    if (
+      portableRelativePath(relativePath) !== relativePath ||
+      seenPaths.has(collisionKey) ||
+      typeof hash !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(hash) ||
+      previousManifest?.files[relativePath] !== hash
+    ) {
+      throw new Error(`Invalid pending package update at ${JSON.stringify(path)}.`);
+    }
+    seenPaths.add(collisionKey);
+  }
+  return {
+    version: 1,
+    packageId: value.packageId,
+    ...(previousManifest === undefined ? {} : { previousManifest }),
+    files: files as Record<string, string>,
+    staleManagedFiles: staleManagedFiles as Record<string, string>,
+    manifest,
+  };
+}
+
+async function readUpdateJournal(directory: string): Promise<PackageUpdateJournal | undefined> {
+  const path = join(directory, UPDATE_FILENAME);
+  try {
+    await assertNoSymlinkPath(path);
+    return parseUpdateJournal(JSON.parse(await readFile(path, "utf8")), path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
@@ -294,6 +405,100 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   }
 }
 
+function packageFilePath(directory: string, relativePath: string): string {
+  const path = join(directory, ...relativePath.split("/"));
+  const destinationRelative = relative(directory, path);
+  if (destinationRelative.startsWith(`..${sep}`) || isAbsolute(destinationRelative)) {
+    throw new Error(`Resolved package path escaped destination: ${relativePath}.`);
+  }
+  return path;
+}
+
+async function assertRecoveryFileState(
+  directory: string,
+  relativePath: string,
+  expectedHash: string,
+  previousHash: string | undefined,
+): Promise<void> {
+  const path = packageFilePath(directory, relativePath);
+  await assertNoSymlinkPath(path);
+  if (!(await pathExists(path))) {
+    if (previousHash !== undefined) {
+      throw new Error(`Cannot recover pending package update: managed file ${JSON.stringify(relativePath)} is missing.`);
+    }
+    return;
+  }
+  const currentHash = sha256(await readFile(path, "utf8"));
+  if (currentHash !== expectedHash && currentHash !== previousHash) {
+    throw new Error(`Cannot recover pending package update: managed file ${JSON.stringify(relativePath)} changed after the interrupted update.`);
+  }
+}
+
+async function recoverPendingUpdate(directory: string): Promise<void> {
+  const journal = await readUpdateJournal(directory);
+  if (journal === undefined) return;
+
+  const currentManifest = await readManifest(directory);
+  if (
+    !manifestsEqual(currentManifest, journal.previousManifest) &&
+    !manifestsEqual(currentManifest, journal.manifest)
+  ) {
+    throw new Error("Cannot recover pending package update: ownership manifest changed after the interrupted update.");
+  }
+
+  for (const [relativePath, content] of Object.entries(journal.files)) {
+    await assertRecoveryFileState(
+      directory,
+      relativePath,
+      sha256(content),
+      journal.previousManifest?.files[relativePath],
+    );
+  }
+  for (const [relativePath, previousHash] of Object.entries(journal.staleManagedFiles)) {
+    const path = packageFilePath(directory, relativePath);
+    await assertNoSymlinkPath(path);
+    if ((await pathExists(path)) && sha256(await readFile(path, "utf8")) !== previousHash) {
+      throw new Error(`Cannot recover pending package update: stale file ${JSON.stringify(relativePath)} changed after the interrupted update.`);
+    }
+  }
+
+  for (const [relativePath, content] of Object.entries(journal.files)) {
+    const path = packageFilePath(directory, relativePath);
+    await assertNoSymlinkPath(path);
+    await atomicWrite(path, content);
+  }
+  for (const relativePath of Object.keys(journal.staleManagedFiles)) {
+    const path = packageFilePath(directory, relativePath);
+    await assertNoSymlinkPath(path);
+    await unlink(path).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    });
+  }
+  await atomicWrite(join(directory, MANIFEST_FILENAME), json(journal.manifest));
+  await unlink(join(directory, UPDATE_FILENAME));
+}
+
+async function writePackageTransaction(
+  directory: string,
+  previousManifest: PackageFileManifest | undefined,
+  files: ReadonlyMap<string, string>,
+  staleManagedFiles: readonly string[],
+  manifest: PackageFileManifest,
+): Promise<void> {
+  const journal: PackageUpdateJournal = {
+    version: 1,
+    packageId: manifest.packageId,
+    ...(previousManifest === undefined ? {} : { previousManifest }),
+    files: Object.fromEntries(files),
+    staleManagedFiles: Object.fromEntries(
+      staleManagedFiles.map((relativePath) => [relativePath, previousManifest!.files[relativePath]!]),
+    ),
+    manifest,
+  };
+  await atomicWrite(join(directory, UPDATE_FILENAME), json(journal));
+  await recoverPendingUpdate(directory);
+}
+
 export async function writePromptPackage(
   promptPackage: PromptPackage,
   destination: string,
@@ -303,6 +508,7 @@ export async function writePromptPackage(
   await assertNoSymlinkPath(directory);
   const files = buildPortableFiles(promptPackage);
   const exists = await pathExists(directory);
+  if (exists) await recoverPendingUpdate(directory);
   const previousManifest = exists ? await readManifest(directory) : undefined;
   if (exists && previousManifest === undefined && (await readdir(directory)).length > 0) {
     throw new Error(
@@ -349,26 +555,12 @@ export async function writePromptPackage(
   }
 
   await mkdir(directory, { recursive: true });
-  for (const [relativePath, content] of files) {
-    const path = join(directory, ...relativePath.split("/"));
-    await assertNoSymlinkPath(path);
-    const destinationRelative = relative(directory, path);
-    if (destinationRelative.startsWith(`..${sep}`) || isAbsolute(destinationRelative)) {
-      throw new Error(`Resolved package path escaped destination: ${relativePath}.`);
-    }
-    await atomicWrite(path, content);
-  }
-  for (const relativePath of staleManagedFiles) {
-    const path = join(directory, ...relativePath.split("/"));
-    await assertNoSymlinkPath(path);
-    await unlink(path);
-  }
   const manifest: PackageFileManifest = {
     version: 1,
     packageId: promptPackage.id,
     files: Object.fromEntries([...files].map(([path, content]) => [path, sha256(content)])),
   };
-  await atomicWrite(join(directory, MANIFEST_FILENAME), json(manifest));
+  await writePackageTransaction(directory, previousManifest, files, staleManagedFiles, manifest);
 
   return {
     directory,

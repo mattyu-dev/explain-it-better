@@ -63,7 +63,10 @@ describe("NewWizard", () => {
     const execute = vi.fn<CliServices["execute"]>(() => Promise.resolve({
       status: "ok",
       message: "Package created.",
-      data: {},
+      data: {
+        written: { directory: "/tmp/package", packageFile: "/tmp/package/prompt-package.json" },
+        package: { verification: "compiled", artifacts: [{ targetId: target.id }] },
+      },
       exitCode: ExitCode.success,
     }));
     const ui = render(createElement(NewWizard, {
@@ -90,6 +93,9 @@ describe("NewWizard", () => {
       fast: false,
     }), expect.any(AbortSignal));
     expect(ui.lastFrame()).toContain("Package created.");
+    expect(ui.lastFrame()).toContain("Package: /tmp/package");
+    expect(ui.lastFrame()).toContain("Evidence level: compiled");
+    expect(ui.lastFrame()).toContain("eib optimize /tmp/package");
   });
 
   it("accepts a recommended clarification and resubmits it as an assumption", async () => {

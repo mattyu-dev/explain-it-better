@@ -29,6 +29,33 @@ async function temporaryDirectory(): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), "eib-package-test-")));
 }
 
+interface TestManifest {
+  readonly version: 1;
+  readonly packageId: string;
+  readonly files: Readonly<Record<string, string>>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isRecord(value) && Object.values(value).every((item) => typeof item === "string");
+}
+
+function parseTestManifest(content: string): TestManifest {
+  const value: unknown = JSON.parse(content);
+  if (
+    !isRecord(value) ||
+    value.version !== 1 ||
+    typeof value.packageId !== "string" ||
+    !isStringRecord(value.files)
+  ) {
+    throw new Error("Expected a package manifest fixture.");
+  }
+  return { version: 1, packageId: value.packageId, files: value.files };
+}
+
 describe("portable package persistence", () => {
   it("writes and reads the canonical package and portable evidence files", async () => {
     const root = await temporaryDirectory();
@@ -114,6 +141,68 @@ describe("portable package persistence", () => {
       "modified package files",
     );
     await expect(readFile(renamedArtifact, "utf8")).resolves.toBe("user edit");
+  });
+
+  it("recovers an interrupted multi-file update before accepting the next write", async () => {
+    const root = await temporaryDirectory();
+    const destination = join(root, "managed");
+    const staged = join(root, "staged");
+    const original = makePromptPackage();
+    await writePromptPackage(original, destination);
+    const previousManifest = parseTestManifest(
+      await readFile(join(destination, ".eib-package-manifest.json"), "utf8"),
+    );
+
+    const updated = makePromptPackage();
+    updated.artifacts[0] = {
+      ...updated.artifacts[0]!,
+      filename: "recovered.md",
+      content: "Recovered after an interrupted update.\n",
+    };
+    await writePromptPackage(updated, staged);
+    const manifest = parseTestManifest(
+      await readFile(join(staged, ".eib-package-manifest.json"), "utf8"),
+    );
+    const files = Object.fromEntries(
+      await Promise.all(
+        Object.keys(manifest.files).map(async (relativePath): Promise<readonly [string, string]> => [
+          relativePath,
+          await readFile(join(staged, ...relativePath.split("/")), "utf8"),
+        ]),
+      ),
+    );
+
+    // Simulate a process dying after it has recorded the transaction and
+    // written only some new files, while the old manifest remains in place.
+    await writeFile(join(destination, "prompt-package.json"), files["prompt-package.json"]!);
+    await mkdir(join(destination, "artifacts", "openai-gpt"), { recursive: true });
+    await writeFile(
+      join(destination, "artifacts", "openai-gpt", "recovered.md"),
+      files["artifacts/openai-gpt/recovered.md"]!,
+    );
+    await writeFile(
+      join(destination, ".eib-package-update.json"),
+      JSON.stringify({
+        version: 1,
+        packageId: updated.id,
+        previousManifest,
+        files,
+        staleManagedFiles: {
+          "artifacts/openai-gpt/prompt.md": previousManifest.files["artifacts/openai-gpt/prompt.md"],
+        },
+        manifest,
+      }),
+    );
+
+    await writePromptPackage(updated, destination);
+
+    await expect(readPromptPackage(destination)).resolves.toEqual(updated);
+    await expect(
+      readFile(join(destination, "artifacts", "openai-gpt", "prompt.md"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readFile(join(destination, ".eib-package-update.json"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses a symlinked destination", async () => {

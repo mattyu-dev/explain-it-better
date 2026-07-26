@@ -17,6 +17,17 @@ function staticallyValidatedPackage() {
   ).promptPackage;
 }
 
+function staticallyInvalidPackage() {
+  const promptPackage = makePromptPackage();
+  return evaluateStatic(
+    promptPackage,
+    Object.fromEntries(promptPackage.evals.map((evalCase) => [
+      evalCase.id,
+      evalCase.category === "output_schema" ? "not json" : "answer",
+    ])),
+  ).promptPackage;
+}
+
 function proofRequest() {
   const promptPackage = staticallyValidatedPackage();
   return {
@@ -50,7 +61,7 @@ describe("local proof receipts", () => {
     expect(JSON.stringify(first)).not.toContain("private output");
     expect(first.observations[0]?.outputHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(first.subject.artifactHashes).toEqual({
-      "openai-gpt/prompt.md": sha256Text("Answer the request and cite supplied evidence."),
+      "[\"openai-gpt\",\"prompt.md\"]": sha256Text("Answer the request and cite supplied evidence."),
     });
     expect(assertProofReceiptPasses(first)).toEqual(first);
   });
@@ -74,12 +85,55 @@ describe("local proof receipts", () => {
 
   it("represents complete failures but makes CI reject them", () => {
     const request = proofRequest();
+    const promptPackage = staticallyInvalidPackage();
     const receipt = createProofReceipt({
       ...request,
+      promptPackage,
       static: { passed: false, findings: [{ code: "output.unknown_case", severity: "error" }] },
     });
     expect(receipt.status).toBe("failed");
     expect(() => assertProofReceiptPasses(receipt)).toThrow("failed run");
+  });
+
+  it("rejects a passing static summary when the recorded static evidence failed", () => {
+    const request = proofRequest();
+    expect(() => createProofReceipt({
+      ...request,
+      promptPackage: staticallyInvalidPackage(),
+      static: { passed: true, findings: [] },
+    })).toThrow("does not match the recorded static evidence");
+  });
+
+  it("does not collapse distinct target and filename pairs in proof evidence", () => {
+    const request = proofRequest();
+    const artifact = request.promptPackage.artifacts[0]!;
+    const promptPackage = {
+      ...request.promptPackage,
+      artifacts: [
+        { ...artifact, targetId: "a", filename: "b/c" },
+        { ...artifact, targetId: "a/b", filename: "c" },
+      ],
+      results: request.promptPackage.results.flatMap((result) => [
+        { ...result, targetId: "a" },
+        { ...result, targetId: "a/b" },
+      ]),
+    };
+    const observations = promptPackage.evals.flatMap((evalCase) => [
+      { caseId: evalCase.id, targetId: "a", outputHash: sha256Text(`output a ${evalCase.id}`), passed: true, checks: [{ id: "fixture-contract", passed: true }] },
+      { caseId: evalCase.id, targetId: "a/b", outputHash: sha256Text(`output b ${evalCase.id}`), passed: true, checks: [{ id: "fixture-contract", passed: true }] },
+    ]);
+    expect(() => createProofReceipt({
+      ...request,
+      promptPackage,
+      artifacts: [{
+        targetId: "a",
+        filename: "b/c",
+        storedContentHash: sha256Text(artifact.content),
+        renderedContentHash: sha256Text(artifact.content),
+        passed: true,
+      }],
+      observations,
+    })).toThrow("complete passing evidence");
   });
 
   it("records deterministic validation failures without retaining fixture content", () => {

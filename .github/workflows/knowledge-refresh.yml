@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # Make the upload below useful even if dependency installation or the
+      # build fails before the refresh command can produce its own evidence.
+      - name: Prepare knowledge refresh artifact directory
+        run: |
+          mkdir -p knowledge-refresh
+          printf '%s\n' 'Knowledge refresh did not start; inspect prior job steps for the failure.' > knowledge-refresh/preflight.txt
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
@@ -37,8 +43,6 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p knowledge-refresh
-
           # `refresh` never changes active profiles, rules, or prompts. Keep
           # collecting and validating evidence so the final report is
           # actionable rather than failing at the first observed problem.

@@ -104,7 +104,9 @@ export const CreateProofReceiptRequestSchema = z.object({
 export type CreateProofReceiptRequest = z.infer<typeof CreateProofReceiptRequestSchema>;
 
 function artifactKey(targetId: string, filename: string): string {
-  return `${targetId}/${filename}`;
+  // Target IDs and portable filenames may both contain slashes. A structured
+  // identity prevents distinct tuples from collapsing into one map/set key.
+  return canonicalJson([targetId, filename]);
 }
 
 function proofSubject(
@@ -152,24 +154,23 @@ function proofSubject(
   };
 }
 
-function assertCompleteStaticEvidence(promptPackage: PromptPackage): void {
+function assertCompleteStaticEvidence(promptPackage: PromptPackage): boolean {
   const expectedPairs = new Set(
     promptPackage.evals.flatMap((evalCase) =>
       promptPackage.artifacts.map((artifact) => `${evalCase.id}\u0000${artifact.targetId}`),
     ),
   );
-  const observedPairs = new Set(
-    promptPackage.results
-      .filter((result) => result.mode === "static")
-      .map((result) => `${result.caseId}\u0000${result.targetId}`),
-  );
+  const staticResults = promptPackage.results.filter((result) => result.mode === "static");
+  const observedPairs = new Set(staticResults.map((result) => `${result.caseId}\u0000${result.targetId}`));
   if (
     expectedPairs.size === 0 ||
+    staticResults.length !== expectedPairs.size ||
     observedPairs.size !== expectedPairs.size ||
     [...expectedPairs].some((pair) => !observedPairs.has(pair))
   ) {
     throw new Error("Proof requires complete static evidence for every case/target pair.");
   }
+  return staticResults.every((result) => result.passed);
 }
 
 function assertArtifactEvidence(
@@ -245,7 +246,10 @@ function receiptHash(receipt: Omit<ProofReceipt, "receiptHash">): string {
  */
 export function createProofReceipt(request: CreateProofReceiptRequest): ProofReceipt {
   const validated = CreateProofReceiptRequestSchema.parse(request);
-  assertCompleteStaticEvidence(validated.promptPackage);
+  const staticEvidencePassed = assertCompleteStaticEvidence(validated.promptPackage);
+  if (validated.static.passed !== staticEvidencePassed) {
+    throw new Error("Proof static summary does not match the recorded static evidence.");
+  }
   assertArtifactEvidence(validated.promptPackage, validated.artifacts);
   assertObservationCoverage(validated.promptPackage, validated.observations);
 

@@ -10,6 +10,7 @@ import {
   type KnowledgeStage,
   type KnowledgeStageOptions,
 } from "./schemas.js";
+import { readKnowledgeResponseBody } from "./response-body.js";
 import { sourceManifest } from "./sources.js";
 
 const defaultFetcher: KnowledgeFetcher = async (url, init) => {
@@ -55,7 +56,7 @@ async function checkOneSource(
         error: `HTTP ${response.status}`,
       };
     }
-    const body = await response.text();
+    const { text: body } = await readKnowledgeResponseBody(response);
     const observedHash = sha256(body);
     const missingSignals = source.expectedSignals.filter(
       (signal) => !body.includes(signal),

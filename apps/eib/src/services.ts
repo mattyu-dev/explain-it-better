@@ -950,8 +950,15 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
                 Codes.usage,
               );
             }
+            if (command.fixtures === undefined) {
+              throw new CliServiceError(
+                "Live target evaluation requires --fixtures for fresh static validation.",
+                Codes.usage,
+              );
+            }
             const sourcePath = await latestProjectPackage(command.packagePath);
             const source = await readPromptPackage(sourcePath);
+            const fixtures = await readStaticFixtures(command.fixtures);
             const repetitions = {
               quick: 1,
               default: 3,
@@ -959,7 +966,7 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             }[command.depth] as 1 | 3 | 5;
             const report = await runExternalEvaluation(
               source,
-              { mode: "live", allowExecution: true, repetitions, signal },
+              { mode: "live", staticOutputs: fixtures, allowExecution: true, repetitions, signal },
               createOpenAIBackend({ allowExecution: true }).evaluationBackend,
             );
             const destination = packageWriteDestination(sourcePath);
@@ -1003,6 +1010,12 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
               Codes.usage,
             );
           }
+          if (command.fixtures === undefined) {
+            throw new CliServiceError(
+              "External evaluation requires --fixtures for fresh static validation.",
+              Codes.usage,
+            );
+          }
           if (command.backend === "openai") {
             throw new CliServiceError(
               "OpenAI is available only for --mode live; proxy evaluation requires codex or claude.",
@@ -1014,9 +1027,10 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             default: 3,
             deep: 5,
           }[command.depth] as 1 | 3 | 5;
+          const fixtures = await readStaticFixtures(command.fixtures);
           const report = await runExternalEvaluation(
             source,
-            { mode: command.mode, allowExecution: true, repetitions, signal },
+            { mode: command.mode, staticOutputs: fixtures, allowExecution: true, repetitions, signal },
             evaluationBackend(command.backend, signal),
           );
           const destination = packageWriteDestination(sourcePath);
@@ -1171,6 +1185,7 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           return executeKnowledgeCommand(
             command,
             signal,
+            workspaceRoot,
             options.knowledgeRefresh === undefined ? {} : { refresh: options.knowledgeRefresh },
           );
       }

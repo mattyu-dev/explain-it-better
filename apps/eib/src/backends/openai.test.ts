@@ -197,3 +197,20 @@ describe("OpenAI Responses target evaluation backend", () => {
     expect(body(fetcher.mock.calls[0]![1])).toMatchObject({ tools: [], tool_choice: "none", store: false });
   });
 });
+
+describe("OpenAI structured compiler backend", () => {
+  it("rejects oversized structured input before starting a request", async () => {
+    const fetcher = vi.fn<OpenAIFetch>();
+    const backend = createOpenAIBackend({
+      allowExecution: true,
+      env: { OPENAI_API_KEY: "sk-test-do-not-use" },
+      fetch: fetcher,
+      maxInputBytes: 1,
+    });
+    await expect(backend.runStructured({
+      prompt: "too large",
+      schema: z.object({ answer: z.string() }),
+    })).rejects.toMatchObject({ code: "input_too_large" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

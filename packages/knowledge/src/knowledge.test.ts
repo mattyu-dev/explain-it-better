@@ -19,7 +19,52 @@ import {
   validateKnowledgePack,
   validateTargetConfiguration,
   type KnowledgeFetcher,
+  type KnowledgeFetchResponse,
 } from "./index.js";
+
+const encoder = new TextEncoder();
+
+function responseWithText(
+  text: string,
+  extra: Omit<KnowledgeFetchResponse, "ok" | "status" | "body"> = {},
+): KnowledgeFetchResponse {
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+        controller.close();
+      },
+    }),
+    ...extra,
+  };
+}
+
+function responseWithChunks(
+  chunks: readonly string[],
+  extra: Omit<KnowledgeFetchResponse, "ok" | "status" | "body"> = {},
+  onCancel?: () => void,
+): KnowledgeFetchResponse {
+  let index = 0;
+  return {
+    ok: true,
+    status: 200,
+    body: new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const chunk = chunks[index];
+        index += 1;
+        if (chunk === undefined) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(encoder.encode(chunk));
+      },
+      ...(onCancel === undefined ? {} : { cancel: onCancel }),
+    }),
+    ...extra,
+  };
+}
 
 describe("reviewed knowledge pack", () => {
   it("creates a non-active, evidence-bound promotion dossier for Claude Opus 5", () => {
@@ -324,14 +369,9 @@ describe("target conformance", () => {
 describe("knowledge drift workflow", () => {
   it("uses required semantic signals for volatile source documents", async () => {
     const fetcher: KnowledgeFetcher = () =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () =>
-          Promise.resolve(
-            "Clear and specific instructions use structured output while Gemini 3.x models keep sampling defaults.",
-          ),
-      });
+      Promise.resolve(responseWithText(
+        "Clear and specific instructions use structured output while Gemini 3.x models keep sampling defaults.",
+      ));
     const report = await checkKnowledgeSources({
       fetcher,
       sourceIds: ["google-gemini-prompting"],
@@ -350,14 +390,9 @@ describe("knowledge drift workflow", () => {
 
   it("detects required-signal drift in volatile source documents", async () => {
     const fetcher: KnowledgeFetcher = () =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () =>
-          Promise.resolve(
-            "Clear and specific instructions use structured output.",
-          ),
-      });
+      Promise.resolve(responseWithText(
+        "Clear and specific instructions use structured output.",
+      ));
     const report = await checkKnowledgeSources({
       fetcher,
       sourceIds: ["google-gemini-prompting"],
@@ -377,11 +412,7 @@ describe("knowledge drift workflow", () => {
 
   it("detects changed reviewed content and stages it without activation", async () => {
     const fetcher: KnowledgeFetcher = () =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve("upstream page changed"),
-      });
+      Promise.resolve(responseWithText("upstream page changed"));
     const report = await checkKnowledgeSources({
       fetcher,
       sourceIds: ["kimi-k3-guide"],
@@ -436,6 +467,30 @@ describe("knowledge drift workflow", () => {
       }).changes,
     ).toEqual([]);
   });
+
+  it("rejects an oversized chunked source before reading the remainder", async () => {
+    let cancelled = false;
+    const fetcher: KnowledgeFetcher = () => Promise.resolve(responseWithChunks(
+      ["x".repeat(2 * 1024 * 1024), "!", "must not be read"],
+      {},
+      () => {
+        cancelled = true;
+      },
+    ));
+
+    const report = await checkKnowledgeSources({
+      fetcher,
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+
+    expect(report.status).toBe("incomplete");
+    expect(report.checks[0]).toMatchObject({
+      status: "unreachable",
+      error: "Response body exceeded the 2097152 byte knowledge document limit.",
+    });
+    expect(cancelled).toBe(true);
+  });
 });
 
 describe("official knowledge discovery", () => {
@@ -468,16 +523,11 @@ describe("official knowledge discovery", () => {
 
   it("keeps source drift and a new official model candidate distinct and proposal-only", async () => {
     const fetcher: KnowledgeFetcher = (url) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () =>
-          Promise.resolve(
-            url.includes("/models/")
-              ? "The GPT-9.1 model is now available in the official catalog."
-              : "GPT-5.6 reasoning effort prompt guidance changed upstream.",
-          ),
-      });
+      Promise.resolve(responseWithText(
+        url.includes("/models/")
+          ? "The GPT-9.1 model is now available in the official catalog."
+          : "GPT-5.6 reasoning effort prompt guidance changed upstream.",
+      ));
     const refresh = await refreshKnowledgeUpdates({
       fetcher,
       sourceIds: ["openai-model-guidance"],
@@ -510,11 +560,7 @@ describe("official knowledge discovery", () => {
 
   it("does not rediscover an already reviewed model and fails closed on unreadable catalogs", async () => {
     const knownFetcher: KnowledgeFetcher = (url) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(url.includes("/models/") ? "GPT-5.6" : "prompt"),
-      });
+      Promise.resolve(responseWithText(url.includes("/models/") ? "GPT-5.6" : "prompt"));
     const known = await refreshKnowledgeUpdates({
       fetcher: knownFetcher,
       sourceIds: ["openai-model-guidance"],
@@ -524,11 +570,7 @@ describe("official knowledge discovery", () => {
 
     const suppressed = await refreshKnowledgeUpdates({
       fetcher: () =>
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          text: () => Promise.resolve("GPT-9.1"),
-        }),
+        Promise.resolve(responseWithText("GPT-9.1")),
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
       reviewedObservations: [
@@ -549,14 +591,11 @@ describe("official knowledge discovery", () => {
     ]);
 
     const unreadableFetcher: KnowledgeFetcher = (url) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
+      Promise.resolve(responseWithText("not used for the catalog", {
         headers: {
           get: () => (url.includes("/models/") ? "application/pdf" : "text/plain"),
         },
-        text: () => Promise.resolve("not used for the catalog"),
-      });
+      }));
     const unreadable = await refreshKnowledgeUpdates({
       fetcher: unreadableFetcher,
       sourceIds: ["openai-model-guidance"],
@@ -578,18 +617,14 @@ describe("official knowledge discovery", () => {
 
   it("uses source adapters to reject aliases, historical references, and examples", async () => {
     const refresh = await refreshKnowledgeUpdates({
-      fetcher: (url) => Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(url.includes("/models/")
+      fetcher: (url) => Promise.resolve(responseWithText(url.includes("/models/")
           ? [
               "GPT-5.6 is the current model.",
               "GPT 9.1 is now available.",
               "The legacy GPT-10.0 was retired.",
               "Example: choose GPT-11.0 as your-model-id.",
             ].join(" ")
-          : "prompt"),
-      }),
+          : "prompt")),
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
     });
@@ -604,11 +639,9 @@ describe("official knowledge discovery", () => {
 
   it("categorizes durable evidence as new, changed, or resolved without activation", async () => {
     const refresh = await refreshKnowledgeUpdates({
-      fetcher: (url) => Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(url.includes("/models/") ? "GPT-8.0 and GPT-9.1 are available." : "prompt"),
-      }),
+      fetcher: (url) => Promise.resolve(responseWithText(
+        url.includes("/models/") ? "GPT-8.0 and GPT-9.1 are available." : "prompt",
+      )),
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
       discoveryBaseline: [
@@ -645,12 +678,9 @@ describe("official knowledge discovery", () => {
 
   it("records rejected redirects and oversized documents as receipts", async () => {
     const redirect = await refreshKnowledgeUpdates({
-      fetcher: () => Promise.resolve({
-        ok: true,
-        status: 200,
+      fetcher: () => Promise.resolve(responseWithText("GPT-9.1", {
         url: "https://untrusted.example/catalog",
-        text: () => Promise.resolve("GPT-9.1"),
-      }),
+      })),
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
     });
@@ -659,16 +689,30 @@ describe("official knowledge discovery", () => {
     ]);
 
     const oversized = await refreshKnowledgeUpdates({
-      fetcher: (url) => Promise.resolve({
-        ok: true,
-        status: 200,
-        text: () => Promise.resolve(url.includes("/models/") ? "x".repeat(2 * 1024 * 1024 + 1) : "prompt"),
-      }),
+      fetcher: (url) => Promise.resolve(url.includes("/models/")
+        ? responseWithChunks(["x".repeat(2 * 1024 * 1024), "!"])
+        : responseWithText("prompt")),
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
     });
     expect(oversized.discovery.receipts).toMatchObject([
       { sourceId: "openai-model-catalog", outcome: "oversize_document", bodyBytes: 2 * 1024 * 1024 + 1 },
     ]);
+  });
+
+  it("extracts candidates from a valid UTF-8 response streamed across chunks", async () => {
+    const refresh = await refreshKnowledgeUpdates({
+      fetcher: (url) => Promise.resolve(url.includes("/models/")
+        ? responseWithChunks(["The ", "GPT-", "9.1 model is available."])
+        : responseWithText("prompt")),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+
+    expect(refresh.discovery).toMatchObject({
+      status: "candidates_detected",
+      candidates: [{ model: "gpt-9.1", sourceId: "openai-model-catalog" }],
+      receipts: [{ sourceId: "openai-model-catalog", outcome: "ok", bodyBytes: 31 }],
+    });
   });
 });
