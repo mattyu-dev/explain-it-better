@@ -61,35 +61,17 @@ import {
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { resolveAppDataPaths, type AppDataPaths } from "./app-data.js";
 import { installProjectRuntime } from "./installer.js";
-import { contextPromptEntries, discoverProjectContext, type ContextManifest } from "./project-context.js";
 import {
   readUserPreferences,
   writeUserPreferences,
   type UserPreferences,
 } from "./preferences.js";
-import {
-  StaleRuntimeRunError,
-  confirmRuntimeRun,
-  createRuntimeRun,
-  readRuntimeRun,
-  type RuntimeRunFreshness,
-} from "./runtime-store.js";
-import {
-  resolveRuntimeTarget,
-  runtimeTargetCapabilities,
-  type RuntimeResolution,
-} from "./runtime.js";
+import { executeRuntimeConfirmation, executeRuntimeTransform } from "./runtime-workflow.js";
+import type { CliServiceResult } from "./service-contracts.js";
 import type { CliCommand, ExecutionBackend, ExitCode } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
 
-export interface CliServiceResult {
-  readonly status: "ok" | "needs_input";
-  readonly message: string;
-  readonly data: unknown;
-  readonly exitCode: ExitCode;
-  /** Readable preview for commands whose payload is too rich for one status line. */
-  readonly display?: string;
-}
+export type { CliServiceResult } from "./service-contracts.js";
 
 export interface CliServices {
   execute(command: Exclude<CliCommand, { name: "tui" | "help" | "version" }>, signal: AbortSignal): Promise<CliServiceResult>;
@@ -971,193 +953,6 @@ async function executeNew(
   };
 }
 
-function transformPreview(options: {
-  readonly rawRequest: string;
-  readonly target: KnowledgeTargetProfile;
-  readonly resolution: RuntimeResolution;
-  readonly context: ContextManifest;
-  readonly assumptions: readonly string[];
-  readonly handoff: string;
-  readonly token: string;
-}): string {
-  const included = options.context.entries.filter((entry) => entry.included);
-  const skipped = options.context.entries.filter((entry) => !entry.included);
-  const runtime = options.resolution.runtime;
-  return [
-    "# EIB compiled task preview",
-    "",
-    `- Target: \`${options.target.id}\` (${options.target.provider} ${options.target.model}; ${options.target.surface})`,
-    `- Target selection: ${options.resolution.selectionSource ?? "unresolved"}`,
-    ...(runtime === undefined
-      ? []
-      : [
-          `- Active runtime: ${runtime.adapterId}; reasoning ${runtime.reasoningMode ?? "surface-managed"}; tools ${runtime.tools.join(", ") || "none"}`,
-        ]),
-    `- Context mode: ${options.context.mode}; ${included.length} included, ${skipped.length} skipped`,
-    `- Repository snapshot: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}${options.context.repository.status === "dirty" ? ` (${options.context.repository.changedEntries} changed entries)` : ""}`,
-    "",
-    "## Raw request",
-    options.rawRequest,
-    "",
-    "## Visible assumptions",
-    ...(options.assumptions.length === 0 ? ["- None"] : options.assumptions.map((item) => `- ${item}`)),
-    "",
-    "## Context manifest",
-    ...(options.context.entries.length === 0
-      ? ["- No eligible project files were found."]
-      : options.context.entries.map(
-          (entry) =>
-            `- ${entry.included ? "included" : "skipped"}: \`${entry.path}\` (${entry.reason}${entry.sha256 === undefined ? "" : `; ${entry.sha256}`})`,
-        )),
-    "",
-    "## Confirmation",
-    `Review the brief below. To hand it to the active agent, run \`eib confirm ${options.token}\`.`,
-    "",
-    "## Compiled agent brief",
-    options.handoff,
-    "",
-  ].join("\n");
-}
-
-function handoffBrief(options: {
-  readonly artifact: RenderedTarget;
-  readonly context: ContextManifest;
-}): string {
-  const included = options.context.entries.filter((entry) => entry.included);
-  return [
-    "# EIB execution contract",
-    "",
-    "Use the compiled target-specific brief below as the active task.",
-    "Inspect the listed project context before making implementation decisions.",
-    "Do not make destructive, external, costly, or scope-expanding changes without the user's confirmation.",
-    `Repository snapshot at compilation: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}. Re-run EIB if this context is no longer current.`,
-    "",
-    "## Selected project context",
-    ...(included.length === 0
-      ? ["- No eligible project context was selected."]
-      : included.map((entry) => `- \`${entry.path}\` (${entry.reason}; sha256 ${entry.sha256})`)),
-    "",
-    "## Target-specific brief",
-    options.artifact.content.trim(),
-    "",
-  ].join("\n");
-}
-
-function runtimeFreshness(
-  context: ContextManifest,
-  targetId: string,
-): Omit<RuntimeRunFreshness, "expiresAt"> {
-  const contextFingerprint = createHash("sha256").update(JSON.stringify({
-    mode: context.mode,
-    root: context.root,
-    repository: context.repository,
-    entries: context.entries.map(({ path, included, reason, sha256, bytes }) => ({ path, included, reason, sha256, bytes })),
-  })).digest("hex");
-  const knowledgeFingerprint = createHash("sha256")
-    .update(`${KNOWLEDGE_PACK_VERSION}:${targetId}`, "utf8")
-    .digest("hex");
-  return {
-    workspaceHead: context.repository.head,
-    contextFingerprint,
-    knowledgeFingerprint,
-  };
-}
-
-async function executeTransform(
-  command: Extract<CliCommand, { name: "transform" }>,
-  signal: AbortSignal,
-  root: string,
-  environment: Readonly<Record<string, string | undefined>>,
-): Promise<CliServiceResult> {
-  if (command.brief === undefined || !command.brief.trim()) {
-    return {
-      status: "needs_input",
-      message: "Describe what you want the active agent to achieve.",
-      data: { field: "brief", question: "What should EIB transform into an agent brief?" },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const original = analyzeBrief(command.brief);
-  const blocking = original.unresolvedAmbiguity.find((item) => item.impact === "blocking");
-  if (blocking !== undefined) {
-    return {
-      status: "needs_input",
-      message: blocking.question,
-      data: { intent: original, question: blocking },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const resolution = await resolveRuntimeTarget({
-    root,
-    ...(command.explicitTarget === undefined ? {} : { explicitTarget: command.explicitTarget }),
-    environment,
-  });
-  if (resolution.status === "needs_input" || resolution.target === undefined) {
-    return {
-      status: "needs_input",
-      message: resolution.message,
-      data: { resolution },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const context = await discoverProjectContext({
-    root,
-    brief: command.brief,
-    deep: command.deep,
-    signal,
-  });
-  const intent = createFastDraft(original);
-  if (resolution.runtime !== undefined) {
-    intent.preferences = [
-      ...intent.preferences,
-      `Active runtime: ${resolution.runtime.adapterId}; reasoning mode: ${resolution.runtime.reasoningMode ?? "surface-managed"}; tools: ${resolution.runtime.tools.join(", ") || "none"}; permissions: ${resolution.runtime.permissions.join(", ") || "unspecified"}.`,
-    ];
-  }
-  intent.context = [...intent.context, ...contextPromptEntries(context)];
-  const prompt = buildPromptSpec(intent);
-  const artifact = compilePrompt(prompt, [resolution.target.id], signal)[0];
-  if (artifact === undefined) {
-    throw new CliServiceError("No target artifact was produced for the resolved runtime.");
-  }
-  const handoff = handoffBrief({ artifact, context });
-  const run = await createRuntimeRun({
-    root,
-    rawRequest: command.brief,
-    targetId: resolution.target.id,
-    ...(resolution.runtime === undefined ? {} : { runtime: resolution.runtime }),
-    context,
-    assumptions: intent.assumptions,
-    handoff,
-    freshness: runtimeFreshness(context, resolution.target.id),
-  });
-  const display = transformPreview({
-    rawRequest: command.brief,
-    target: resolution.target,
-    resolution,
-    context,
-    assumptions: intent.assumptions,
-    handoff,
-    token: run.token,
-  });
-  return {
-    status: "ok",
-    message: `Compiled a ${command.deep ? "deep" : "scoped"} runtime brief for ${resolution.target.id}. Confirmation required.`,
-    data: {
-      runToken: run.token,
-      target: resolution.target,
-      runtime: resolution.runtime,
-      targetSelection: resolution.selectionSource,
-      context,
-      assumptions: intent.assumptions,
-      handoff,
-      capabilities: resolution.capabilities,
-      targetCapabilities: runtimeTargetCapabilities(),
-    },
-    display,
-    exitCode: Codes.success,
-  };
-}
-
 async function executeImprove(
   command: Extract<CliCommand, { name: "improve" }>,
   signal: AbortSignal,
@@ -1424,49 +1219,13 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           };
         }
         case "transform":
-          return executeTransform(command, signal, workspaceRoot, runtimeEnvironment);
-        case "confirm": {
-          const existing = await readRuntimeRun(workspaceRoot, command.token);
-          const currentContext = await discoverProjectContext({
+          return executeRuntimeTransform(command, signal, {
             root: workspaceRoot,
-            brief: existing.rawRequest,
-            deep: existing.context.mode === "deep",
-            signal,
+            environment: runtimeEnvironment,
+            compilePrompt,
           });
-          let run;
-          try {
-            run = await confirmRuntimeRun(
-              workspaceRoot,
-              command.token,
-              runtimeFreshness(currentContext, existing.targetId),
-            );
-          } catch (error) {
-            if (error instanceof StaleRuntimeRunError) {
-              return {
-                status: "needs_input",
-                message: error.message,
-                data: { runToken: command.token, staleReasons: error.reasons, retransformRequired: true },
-                exitCode: Codes.needsInput,
-              };
-            }
-            throw error;
-          }
-          const display = [
-            "# EIB confirmed handoff",
-            "",
-            `Run token \`${run.token}\` is confirmed. Follow this brief as the active task:`,
-            "",
-            run.handoff,
-            "",
-          ].join("\n");
-          return {
-            status: "ok",
-            message: `Confirmed runtime brief ${run.token}.`,
-            data: { runToken: run.token, confirmedAt: run.confirmedAt, handoff: run.handoff },
-            display,
-            exitCode: Codes.success,
-          };
-        }
+        case "confirm":
+          return executeRuntimeConfirmation(command, signal, workspaceRoot);
         case "new": {
           const { preferences } = await readUserPreferences(appDataPaths.preferencesFile);
           return executeNew(command, signal, preferences.defaultTarget);
