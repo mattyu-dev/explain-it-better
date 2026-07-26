@@ -357,4 +357,105 @@ describe("parseArgs", () => {
       "Unknown option: --unsafe",
     );
   });
+
+  it("parses the remaining non-interactive command variants", () => {
+    expect(parseArgs(["--version"])).toEqual({
+      name: "version",
+      global: { json: false },
+    });
+    expect(parseArgs(["--help", "optimize"])).toEqual({
+      name: "help",
+      global: { json: false },
+      topic: "optimize",
+    });
+    expect(parseArgs(["new", "--fast", "--target", "openai:gpt", "--output", "draft.md"])).toEqual({
+      name: "new",
+      global: { json: false },
+      fast: true,
+      targets: ["openai:gpt"],
+      output: "draft.md",
+    });
+    expect(parseArgs(["improve", "package.json", "--fast", "--feedback", "be concise", "--output", "next.json"])).toEqual({
+      name: "improve",
+      global: { json: false },
+      packagePath: "package.json",
+      feedback: "be concise",
+      fast: true,
+      output: "next.json",
+    });
+    expect(parseArgs(["doctor"])).toEqual({ name: "doctor", global: { json: false } });
+  });
+
+  it("enforces command boundaries for version, help, and positional arguments", () => {
+    expect(() => parseArgs(["--version", "doctor"])).toThrow(
+      "--version cannot be combined with a command",
+    );
+    expect(() => parseArgs(["--version=1"])).toThrow("does not accept a value");
+    expect(() => parseArgs(["install", "unexpected"])).toThrow(
+      "install does not accept positional arguments",
+    );
+    expect(() => parseArgs(["confirm"])).toThrow("confirm requires exactly one run token");
+    expect(() => parseArgs(["doctor", "unexpected"])).toThrow(
+      "doctor does not accept positional arguments",
+    );
+  });
+
+  it("parses export formats and rejects unsafe format/output combinations", () => {
+    expect(parseArgs(["export", "package.json", "--format", "directory", "--output", "bundle"])).toEqual({
+      name: "export",
+      global: { json: false },
+      packagePath: "package.json",
+      format: "directory",
+      output: "bundle",
+    });
+    expect(parseArgs(["export", "--format", "clipboard"])).toEqual({
+      name: "export",
+      global: { json: false },
+      packagePath: ".eib/package.json",
+      format: "clipboard",
+    });
+    expect(() => parseArgs(["export"])).toThrow("directory export requires --output");
+    expect(() => parseArgs(["export", "--format", "clipboard", "--output", "bundle"])).toThrow(
+      "--output is not valid for clipboard export",
+    );
+    expect(() => parseArgs(["export", "--format", "zip", "--output", "bundle"])).toThrow(
+      "--format must be directory or clipboard",
+    );
+  });
+
+  it("rejects invalid optimization evidence and backend combinations", () => {
+    expect(() => parseArgs(["optimize", "--minimum-improvement", "0.1"])).toThrow(
+      "--minimum-improvement requires --runs or --backend",
+    );
+    expect(() => parseArgs(["optimize", "--backend", "other", "--allow-execution"])).toThrow(
+      "--backend must be codex, claude, or openai",
+    );
+    expect(() => parseArgs(["optimize", "--backend", "codex", "--allow-execution", "--comparisons", "comparisons.json"])).toThrow(
+      "--comparisons requires --runs",
+    );
+    expect(() => parseArgs(["optimize", "--backend", "codex", "--allow-execution", "--depth", "slow"])).toThrow(
+      "--depth must be quick, default, or deep",
+    );
+    expect(() => parseArgs(["optimize", "one", "two"])).toThrow(
+      "optimize accepts at most one package path",
+    );
+  });
+
+  it("rejects invalid external evaluation contracts before execution", () => {
+    expect(() => parseArgs(["eval", "--mode", "other"])).toThrow(
+      "--mode must be static, proxy, or live",
+    );
+    expect(() => parseArgs(["eval", "--mode", "proxy", "--backend", "openai", "--allow-execution", "--fixtures", "out.json"])).toThrow(
+      "proxy evaluation requires --backend codex|claude",
+    );
+    expect(() => parseArgs(["eval", "--mode", "static", "--depth", "quick"])).toThrow(
+      "--depth is only valid for proxy or live evaluation",
+    );
+    expect(() => parseArgs(["eval", "--mode", "live", "--backend", "openai", "--allow-execution"])).toThrow(
+      "proxy or live evaluation requires --fixtures",
+    );
+    expect(() => parseArgs(["eval", "--mode", "proxy", "--backend", "codex", "--allow-execution", "--fixtures", "out.json", "--depth", "slow"])).toThrow(
+      "--depth must be quick, default, or deep",
+    );
+  });
 });
