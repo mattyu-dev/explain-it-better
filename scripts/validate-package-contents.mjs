@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { statSync } from "node:fs";
+import { resolve } from "node:path";
 
 const workspaces = [
   {
@@ -19,6 +21,12 @@ const forbiddenPath = (path) =>
   path.includes(".test.") ||
   path.endsWith(".tsbuildinfo") ||
   path.includes("test-fixtures");
+
+const root = resolve(import.meta.dirname, "..");
+const cliMode = statSync(resolve(root, "apps/eib/dist/cli.js")).mode;
+if ((cliMode & 0o111) === 0) {
+  throw new Error("@eib/cli dist/cli.js must be executable so npm-linked eib works.");
+}
 
 for (const workspace of workspaces) {
   const raw = execFileSync(

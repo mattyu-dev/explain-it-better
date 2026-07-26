@@ -11,12 +11,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run clean && tsc -b",
+    "build": "npm run clean && tsc -b && node scripts/mark-cli-executable.mjs",
     "clean": "node scripts/clean-build.mjs",
     "dev": "npm run dev --workspace @eib/cli",
     "lint": "eslint .",
     "pack:check": "node scripts/validate-package-contents.mjs",
-    "release:check": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run pack:check && npm audit --audit-level=high",
+    "release:check": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run smoke:cli && npm run pack:check && npm audit --audit-level=high",
+    "smoke:cli": "node scripts/smoke-cli.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
+import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { render } from "ink";
@@ -170,7 +171,7 @@ export async function runCli(
 const invokedPath = process.argv[1];
 if (
   invokedPath !== undefined &&
-  pathToFileURL(resolve(invokedPath)).href === import.meta.url
+  pathToFileURL(realpathSync(resolve(invokedPath))).href === import.meta.url
 ) {
   void runCli().then((code) => {
     process.exitCode = code;
