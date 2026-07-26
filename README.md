@@ -10,8 +10,8 @@ rough request → visible brief → explicit confirmation → same-conversation 
 ```
 
 The optional **Power mode** adds the local `eib` CLI, target-aware rendering,
-safe project-context selection, reproducible packages, evaluation, and MCP
-tools. It is an enhancement, never a requirement for the core Skill.
+safe project-context selection, reproducible packages, evaluation, and a local
+stdio MCP server. It is an enhancement, never a requirement for the core Skill.
 
 Power mode's reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI,
 DeepSeek, Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally
@@ -82,9 +82,10 @@ eib install
 ```
 
 This writes the portable Skill to `.agents/skills`, `.codex/skills`, and
-`.claude/skills`, plus optional `/eib` and `/eib-deep` Power-mode Claude Code
-commands. It never overwrites `AGENTS.md`, `CLAUDE.md`, or another user-owned
-instruction file.
+`.claude/skills`, plus `/eib` and `/eib-deep` commands for **Claude Code**.
+Other hosts receive the portable confirmation-gated Skill, not a CLI-backed
+slash command. It never overwrites `AGENTS.md`, `CLAUDE.md`, or another
+user-owned instruction file.
 
 ### Compatibility
 
@@ -93,8 +94,7 @@ instruction file.
 | Codex CLI marketplace | Verified | No local project access implied |
 | Claude Code marketplace | Verified | Optional CLI commands |
 | ChatGPT or Claude desktop/web import | Account- and UI-dependent | No local project access implied |
-| Any local MCP host | Not required | `eib-mcp` stdio server |
-| Remote chat apps | Yes, where they support Skill import | Requires a separately hosted authenticated MCP service for engine tools |
+| Local MCP host (manual configuration) | Not required | `eib-mcp` stdio server |
 
 After upgrading EIB, run `eib install --update`. Every generated host asset is
 versioned and fingerprinted; EIB refreshes only assets whose fingerprint shows
@@ -117,10 +117,20 @@ manifest, and assumptions:
 eib confirm <run-token>
 ```
 
-`confirm` returns the exact handoff brief for the active agent. Use
-`/eib "request"` in an installed supported host; use
-`/eib-deep "complex request"` only when an explicit full tracked-repository
-scan is appropriate. The CLI equivalent is `eib transform --deep …`.
+`confirm` returns the exact handoff brief for the active agent. In Claude Code,
+use `/eib "request"`; use `/eib-deep "complex request"` only when an explicit
+full tracked-repository scan is appropriate. The portable Skill on other hosts
+uses its same-conversation confirmation flow. The CLI equivalent is
+`eib transform --deep …`.
+
+### Local MCP
+
+`eib-mcp` is a local stdio server, not a hosted remote service. Configure it in
+an MCP-capable host with command `eib-mcp` and a working directory set to the
+project it may inspect. Its workspace is fixed at launch: clients cannot supply
+or redirect a workspace through tool arguments. The server returns preparation
+and acknowledgement handoffs only; the host remains responsible for collecting
+the user's explicit approval before it calls `eib_confirm`.
 
 Scoped mode records metadata for project instructions, manifests, and
 request-relevant files; Power mode does not copy their raw text into a host
@@ -208,36 +218,17 @@ The resulting bundle is useful evidence, not an application to deploy. It
 contains the original demand, clarification lineage, rendered prompt,
 evaluation cases, scores, provenance, and verification report.
 
-## Commands
+## CLI reference
 
-```text
-eib
-eib install [--update]
-eib-mcp
-eib transform [request] --runtime auto [--deep] [--for <target>]
-eib confirm <run-token>
-eib new [brief] [--target <id>] [--fast] [--output <directory>]
-        [--schema '<JSON object>']
-eib improve <package> --feedback <correction> [--output <directory>]
-eib optimize [package] [--target <id>] [--max-candidates 1|2|3]
-             [--runs <json-file> [--comparisons <json-file>]
-              | --backend codex|claude|openai --allow-execution
-                [--depth quick|default|deep]]
-             [--minimum-improvement <n>] [--output <evidence.json>]
-eib compile [package] --target <id> [--output <directory>]
-eib eval [package] --mode static [--fixtures <json-file>]
-eib eval [package] --mode proxy --backend codex|claude --allow-execution
-         [--depth quick|default|deep]
-eib eval [package] --mode live --backend openai --allow-execution
-         [--depth quick|default|deep]
-eib export [package] --format clipboard|directory [--output <directory>]
-eib doctor
-eib knowledge check|stage|refresh
-eib knowledge promote-plan <provider/model> [--from <refresh.json>]
-```
+The built CLI is the command reference; it is validated in the release gate.
+Run `eib --help`, then `eib <command> --help`, for the exact syntax supported
+by the installed version. The command groups are: project integration
+(`install`, `transform`, `confirm`); prompt packages (`new`, `improve`,
+`compile`, `export`); evidence (`optimize`, `eval`); local readiness
+(`preferences`, `doctor`); and reviewed knowledge (`knowledge`).
 
-Every non-interactive command supports `--json`. Exit codes are stable:
-`0` success, `1` command failure, `2` usage error, `3` clarification required,
+Every non-interactive command supports `--json`. Exit codes are stable: `0`
+success, `1` command failure, `2` usage error, `3` clarification required,
 `69` backend unavailable, and `130` cancellation.
 
 `eib improve` incorporates explicit human feedback into a new prompt bundle;
