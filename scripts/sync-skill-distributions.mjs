@@ -8,9 +8,11 @@ const sourceFiles = [
   "agents/openai.yaml",
 ];
 const destinations = [
-  "apps/eib/skills/explain-it-better",
-  "plugins/explain-it-better/skills/explain-it-better",
-  "claude-plugin/explain-it-better/skills/explain-it-better",
+  { path: "apps/eib/skills/explain-it-better", files: sourceFiles },
+  { path: "plugins/explain-it-better/skills/explain-it-better", files: sourceFiles },
+  // Claude Code consumes SKILL.md only; OpenAI app metadata is not a Claude
+  // plugin contract and must not be shipped as dead distribution surface.
+  { path: "claude-plugin/explain-it-better/skills/explain-it-better", files: ["SKILL.md"] },
 ];
 
 const sourceRoot = resolve(root, "skills/explain-it-better");
@@ -55,7 +57,8 @@ for (const forbidden of [/`eib(?:-mcp)?\b/u, /eib_prepare/u, /eib_confirm/u]) {
 const stale = [];
 for (const destination of destinations) {
   for (const [file, expected] of contents) {
-    const target = resolve(root, destination, file);
+    if (!destination.files.includes(file)) continue;
+    const target = resolve(root, destination.path, file);
     let current;
     try {
       current = await readFile(target, "utf8");
@@ -64,10 +67,10 @@ for (const destination of destinations) {
     }
     if (current === expected) continue;
     if (checkOnly) {
-      stale.push(`${destination}/${file}`);
+      stale.push(`${destination.path}/${file}`);
       continue;
     }
-    await mkdir(resolve(root, destination, file, ".."), { recursive: true });
+    await mkdir(resolve(root, destination.path, file, ".."), { recursive: true });
     await writeFile(target, expected, "utf8");
   }
 }

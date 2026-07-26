@@ -10,9 +10,6 @@ export {
   type OpenAIResponsesEvaluationErrorCode,
 } from "./openai.js";
 export {
-  createHermesBackend,
-  createKimiBackend,
-  getTargetOnlyBackend,
   TARGET_ONLY_SAFETY_REASONS,
 } from "./target-only.js";
 export {
@@ -24,5 +21,4 @@ export {
   type LocalCompilerBackend,
   type StructuredRunRequest,
   type StructuredRunResult,
-  type TargetOnlyBackend,
 } from "./types.js";

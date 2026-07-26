@@ -415,5 +415,3 @@ export function runKnowledgeRuleConformance(
     unappliedRuleIds,
   });
 }
-
-export const runAllRuleConformance = runKnowledgeRuleConformance;

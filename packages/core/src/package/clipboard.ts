@@ -6,15 +6,6 @@ export interface ClipboardWriter {
   writeText(text: string): Promise<void>;
 }
 
-export class MemoryClipboardWriter implements ClipboardWriter {
-  value = "";
-
-  writeText(text: string): Promise<void> {
-    this.value = text;
-    return Promise.resolve();
-  }
-}
-
 interface ClipboardCommand {
   readonly command: string;
   readonly args: readonly string[];

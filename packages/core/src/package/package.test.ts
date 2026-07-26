@@ -11,11 +11,19 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   formatPromptPackageForClipboard,
-  MemoryClipboardWriter,
 } from "./clipboard.js";
 import { exportPromptPackage } from "./export.js";
 import { readPromptPackage, writePromptPackage } from "./storage.js";
 import { makePromptPackage } from "./test-fixtures.js";
+
+class MemoryClipboardWriter {
+  value = "";
+
+  writeText(text: string): Promise<void> {
+    this.value = text;
+    return Promise.resolve();
+  }
+}
 
 async function temporaryDirectory(): Promise<string> {
   return realpath(await mkdtemp(join(tmpdir(), "eib-package-test-")));
