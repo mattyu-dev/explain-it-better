@@ -5,8 +5,17 @@ import { z } from "zod";
 import type { ContextManifest } from "./project-context.js";
 import type { RuntimeDescriptor } from "./runtime.js";
 
+export const RUNTIME_RUN_TTL_MS = 30 * 60 * 1000;
+
+const RuntimeRunFreshnessSchema = z.object({
+  workspaceHead: z.string().nullable(),
+  contextFingerprint: z.string().regex(/^[a-f0-9]{64}$/iu),
+  knowledgeFingerprint: z.string().regex(/^[a-f0-9]{64}$/iu),
+  expiresAt: z.iso.datetime(),
+}).strict();
+
 const RuntimeRunSchema = z.object({
-  version: z.literal(1),
+  version: z.literal(2),
   token: z.string().uuid(),
   createdAt: z.iso.datetime(),
   confirmedAt: z.iso.datetime().optional(),
@@ -25,6 +34,11 @@ const RuntimeRunSchema = z.object({
   context: z.object({
     mode: z.enum(["scoped", "deep"]),
     root: z.string(),
+    repository: z.object({
+      head: z.string().nullable(),
+      status: z.enum(["clean", "dirty", "unavailable"]),
+      changedEntries: z.number().int().nonnegative(),
+    }),
     entries: z.array(z.object({
       path: z.string(),
       included: z.boolean(),
@@ -32,13 +46,24 @@ const RuntimeRunSchema = z.object({
       sha256: z.string().optional(),
       bytes: z.number().optional(),
       inlineContent: z.string().optional(),
+      excerptContent: z.string().optional(),
+      contentTruncated: z.boolean().optional(),
     })),
   }),
+  freshness: RuntimeRunFreshnessSchema,
   assumptions: z.array(z.string()),
   handoff: z.string().min(1),
 }).strict();
 
 export type RuntimeRun = z.infer<typeof RuntimeRunSchema>;
+export type RuntimeRunFreshness = z.infer<typeof RuntimeRunFreshnessSchema>;
+
+export class StaleRuntimeRunError extends Error {
+  public constructor(readonly reasons: readonly string[]) {
+    super(`This EIB run is stale (${reasons.join(", ")}). Re-run eib transform to create a fresh brief.`);
+    this.name = "StaleRuntimeRunError";
+  }
+}
 
 function runDirectory(root: string): string {
   return join(resolve(root), ".eib", "runtime-runs");
@@ -49,6 +74,10 @@ function runPath(root: string, token: string): string {
   return join(runDirectory(root), `${token}.json`);
 }
 
+export async function readRuntimeRun(root: string, token: string): Promise<RuntimeRun> {
+  return RuntimeRunSchema.parse(JSON.parse(await readFile(runPath(root, token), "utf8")) as unknown);
+}
+
 export async function createRuntimeRun(options: {
   readonly root: string;
   readonly rawRequest: string;
@@ -57,15 +86,23 @@ export async function createRuntimeRun(options: {
   readonly context: ContextManifest;
   readonly assumptions: readonly string[];
   readonly handoff: string;
+  readonly freshness: Omit<RuntimeRunFreshness, "expiresAt">;
+  /** Injectable only for deterministic tests. */
+  readonly now?: Date;
 }): Promise<RuntimeRun> {
+  const createdAt = options.now ?? new Date();
   const run: RuntimeRun = RuntimeRunSchema.parse({
-    version: 1,
+    version: 2,
     token: randomUUID(),
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt.toISOString(),
     rawRequest: options.rawRequest,
     targetId: options.targetId,
     ...(options.runtime === undefined ? {} : { runtime: options.runtime }),
     context: options.context,
+    freshness: {
+      ...options.freshness,
+      expiresAt: new Date(createdAt.getTime() + RUNTIME_RUN_TTL_MS).toISOString(),
+    },
     assumptions: [...options.assumptions],
     handoff: options.handoff,
   });
@@ -76,9 +113,21 @@ export async function createRuntimeRun(options: {
   return run;
 }
 
-export async function confirmRuntimeRun(root: string, token: string): Promise<RuntimeRun> {
+export async function confirmRuntimeRun(
+  root: string,
+  token: string,
+  currentFreshness: Omit<RuntimeRunFreshness, "expiresAt">,
+  now = new Date(),
+): Promise<RuntimeRun> {
   const file = runPath(root, token);
-  const run = RuntimeRunSchema.parse(JSON.parse(await readFile(file, "utf8")) as unknown);
+  const run = await readRuntimeRun(root, token);
+  const reasons = [
+    ...(new Date(run.freshness.expiresAt).getTime() <= now.getTime() ? ["confirmation window expired"] : []),
+    ...(run.freshness.workspaceHead !== currentFreshness.workspaceHead ? ["workspace HEAD changed"] : []),
+    ...(run.freshness.contextFingerprint !== currentFreshness.contextFingerprint ? ["selected context changed"] : []),
+    ...(run.freshness.knowledgeFingerprint !== currentFreshness.knowledgeFingerprint ? ["knowledge pack changed"] : []),
+  ];
+  if (reasons.length > 0) throw new StaleRuntimeRunError(reasons);
   if (run.confirmedAt !== undefined) return run;
   const confirmed = RuntimeRunSchema.parse({ ...run, confirmedAt: new Date().toISOString() });
   const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;

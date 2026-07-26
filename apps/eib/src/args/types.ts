@@ -30,7 +30,7 @@ export type CandidateCount = 1 | 2 | 3;
 
 export type CliCommand =
   | { name: "tui"; global: GlobalOptions }
-  | { name: "install"; global: GlobalOptions }
+  | { name: "install"; global: GlobalOptions; update: boolean }
   | {
       name: "transform";
       global: GlobalOptions;
@@ -118,10 +118,14 @@ export type CliCommand =
   | {
       name: "knowledge";
       global: GlobalOptions;
-      /** `refresh` produces a review proposal only; it never activates rules. */
-      action: "check" | "stage" | "refresh";
+      /** `refresh` and `promote-plan` are review-only; neither activates rules. */
+      action: "check" | "stage" | "refresh" | "promote-plan";
       output?: string;
       sourceIds: string[];
+      /** Candidate key (`provider/model`) required by `knowledge promote-plan`. */
+      candidate?: string;
+      /** Optional previous non-active refresh proposal containing discovery evidence. */
+      proposalPath?: string;
     }
   | { name: "help"; global: GlobalOptions; topic?: string }
   | { name: "version"; global: GlobalOptions };

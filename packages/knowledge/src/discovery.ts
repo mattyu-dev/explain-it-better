@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import {
   KNOWLEDGE_PACK_VERSION,
   KnowledgeDiscoveryCandidateSchema,
+  KnowledgeDiscoveryResolvedEntrySchema,
   KnowledgeRefreshReportSchema,
   OfficialDiscoverySourceSchema,
   type KnowledgeDiscoveryCandidate,
+  type KnowledgeDiscoveryFetchReceipt,
   type KnowledgeDiscoveryObservation,
   type KnowledgeFetchResponse,
   type KnowledgeRefreshOptions,
@@ -137,9 +139,15 @@ export const officialDiscoveryHosts = {
 export const reviewedDiscoveryObservationInventory: readonly KnowledgeDiscoveryObservation[] =
   [];
 
-const modelPatterns: Readonly<
-  Record<OfficialDiscoverySource["provider"], RegExp>
-> = {
+type DiscoveryProvider = OfficialDiscoverySource["provider"];
+
+/**
+ * These patterns deliberately live behind source adapters instead of one
+ * generic HTML scraper. Each adapter is tied to one official provider page
+ * and applies the provider's naming grammar plus availability exclusions.
+ * They remain discovery evidence only, never profile/capability inference.
+ */
+const providerModelPatterns: Readonly<Record<DiscoveryProvider, RegExp>> = {
   openai:
     /\b(?:gpt|o)[-_ ]\d+(?:\.\d+)?(?:[-_ ](?:mini|nano|pro|codex|max|latest|preview|realtime|audio|search)){0,3}\b/gi,
   anthropic:
@@ -158,16 +166,93 @@ const modelPatterns: Readonly<
   hermes: /\bhermes[-_ ]\d+(?:\.\d+)?(?:[-_ ](?:pro|coder|latest)){0,2}\b/gi,
 };
 
-const surfaceMarkers: readonly {
-  readonly match: RegExp;
-  readonly surface: "api" | "chat_app" | "coding_cli" | "open_weights" | "agent_cli";
-}[] = [
-  { match: /\b(?:responses|messages|generate content) api\b/i, surface: "api" },
-  { match: /\b(?:chatgpt|claude\.ai|web chat)\b/i, surface: "chat_app" },
-  { match: /\b(?:codex|claude code|coding cli)\b/i, surface: "coding_cli" },
-  { match: /\b(?:open weights?|model weights?)\b/i, surface: "open_weights" },
-  { match: /\b(?:agent cli|terminal agent)\b/i, surface: "agent_cli" },
-];
+const historicalMarkers =
+  /\b(?:deprecated|retired|legacy|historical|previous(?:ly)?|superseded|sunset|no longer available|migration from)\b/i;
+const nonModelExampleMarkers =
+  /\b(?:example|sample|placeholder|your[-_ ]model[-_ ]id)\b/i;
+
+interface ExtractedToken {
+  readonly kind: "model" | "surface";
+  readonly model: string | null;
+  readonly surface: KnowledgeDiscoveryCandidate["surface"];
+  readonly index: number;
+  readonly length: number;
+}
+
+interface DiscoverySourceAdapter {
+  readonly id: string;
+  readonly extractorId: string;
+  extract(body: string): readonly ExtractedToken[];
+}
+
+function isCurrentCatalogContext(body: string, index: number, length: number): boolean {
+  // Scope exclusions to the local sentence/list item. A historical model on
+  // the same long page must not suppress a nearby current catalog entry.
+  const before = body.lastIndexOf(".", index - 1);
+  const after = body.indexOf(".", index + length);
+  const start = Math.max(0, before < 0 ? index - 180 : before + 1);
+  const end = Math.min(body.length, after < 0 ? index + length + 180 : after + 1);
+  const context = body.slice(start, end);
+  return !historicalMarkers.test(context) && !nonModelExampleMarkers.test(context);
+}
+
+function extractProviderModels(
+  provider: DiscoveryProvider,
+  body: string,
+): readonly ExtractedToken[] {
+  const pattern = new RegExp(providerModelPatterns[provider].source, "gi");
+  const tokens: ExtractedToken[] = [];
+  for (const match of body.matchAll(pattern)) {
+    const raw = match[0];
+    const index = match.index ?? 0;
+    // A catalog/release adapter must never treat historical documentation or
+    // an arbitrary example string as a new release announcement.
+    if (!isCurrentCatalogContext(body, index, raw.length)) {
+      continue;
+    }
+    tokens.push({
+      kind: "model",
+      model: canonicalModel(raw),
+      surface: null,
+      index,
+      length: raw.length,
+    });
+  }
+  return tokens;
+}
+
+function extractExplicitSurfaceMarkers(body: string): readonly ExtractedToken[] {
+  const tokens: ExtractedToken[] = [];
+  // Surface observations need an explicit machine-readable declaration. Do
+  // not infer them from prose such as a blog post mentioning "Codex".
+  const pattern = /data-eib-surface=["'](api|chat_app|coding_cli|open_weights|agent_cli)["']/gi;
+  for (const match of body.matchAll(pattern)) {
+    const raw = match[0];
+    const index = match.index ?? 0;
+    if (!isCurrentCatalogContext(body, index, raw.length)) {
+      continue;
+    }
+    tokens.push({
+      kind: "surface",
+      model: null,
+      surface: match[1] as KnowledgeDiscoveryCandidate["surface"],
+      index,
+      length: raw.length,
+    });
+  }
+  return tokens;
+}
+
+function providerAdapter(source: OfficialDiscoverySource): DiscoverySourceAdapter {
+  return {
+    id: source.id,
+    extractorId: `${source.provider}-${source.kind}-v1`,
+    extract: (body) => [
+      ...extractProviderModels(source.provider, body),
+      ...extractExplicitSurfaceMarkers(body),
+    ],
+  };
+}
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -256,70 +341,36 @@ function extractCandidates(
   const candidates: KnowledgeDiscoveryCandidate[] = [];
   const suppressedObservations: KnowledgeDiscoveryObservation[] = [];
   const seen = new Set<string>();
-  const modelPattern = new RegExp(modelPatterns[source.provider].source, "gi");
-
-  for (const match of body.matchAll(modelPattern)) {
-    const rawModel = match[0];
-    const model = canonicalModel(rawModel);
-    if (knownModels.has(model)) {
+  for (const token of providerAdapter(source).extract(body)) {
+    if (token.kind === "model" && token.model !== null && knownModels.has(token.model)) {
+      continue;
+    }
+    if (token.kind === "surface" && token.surface !== null && knownSurfaces.has(token.surface)) {
       continue;
     }
     const reviewed = observations.get(
-      observationKey("model", source.provider, model, null),
+      observationKey(token.kind, source.provider, token.model, token.surface),
     );
     if (reviewed !== undefined) {
       suppressedObservations.push(reviewed);
       continue;
     }
-    const key = `model:${model}`;
+    const key = observationKey(token.kind, source.provider, token.model, token.surface);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     candidates.push(
       KnowledgeDiscoveryCandidateSchema.parse({
-        kind: "model",
+        kind: token.kind,
         provider: source.provider,
-        model,
-        surface: null,
+        model: token.model,
+        surface: token.surface,
         sourceId: source.id,
         url: source.url,
         evidenceHash,
         observedAt,
-        evidenceExcerpt: excerpt(body, match.index ?? 0, rawModel.length),
-        reviewStatus: "discovered_unreviewed",
-      }),
-    );
-  }
-
-  for (const marker of surfaceMarkers) {
-    const match = marker.match.exec(body);
-    if (match === null || knownSurfaces.has(marker.surface)) {
-      continue;
-    }
-    const reviewed = observations.get(
-      observationKey("surface", source.provider, null, marker.surface),
-    );
-    if (reviewed !== undefined) {
-      suppressedObservations.push(reviewed);
-      continue;
-    }
-    const key = `surface:${marker.surface}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    candidates.push(
-      KnowledgeDiscoveryCandidateSchema.parse({
-        kind: "surface",
-        provider: source.provider,
-        model: null,
-        surface: marker.surface,
-        sourceId: source.id,
-        url: source.url,
-        evidenceHash,
-        observedAt,
-        evidenceExcerpt: excerpt(body, match.index ?? 0, match[0].length),
+        evidenceExcerpt: excerpt(body, token.index, token.length),
         reviewStatus: "discovered_unreviewed",
       }),
     );
@@ -346,9 +397,32 @@ async function discoverFromSource(
   timeoutMs: number,
   observedAt: string,
   observations: ReadonlyMap<string, KnowledgeDiscoveryObservation>,
-): Promise<ReturnType<typeof extractCandidates> | null> {
+): Promise<{
+  readonly extraction: ReturnType<typeof extractCandidates> | null;
+  readonly receipt: KnowledgeDiscoveryFetchReceipt;
+}> {
+  const adapter = providerAdapter(source);
+  const receipt = (
+    values: Omit<KnowledgeDiscoveryFetchReceipt, "sourceId" | "requestedUrl" | "extractorId">,
+  ): KnowledgeDiscoveryFetchReceipt => ({
+    sourceId: source.id,
+    requestedUrl: source.url,
+    extractorId: adapter.extractorId,
+    ...values,
+  });
   if (!isTrustedDiscoverySource(source)) {
-    return null;
+    return {
+      extraction: null,
+      receipt: receipt({
+        finalUrl: null,
+        httpStatus: null,
+        contentType: null,
+        bodyBytes: null,
+        bodyHash: null,
+        outcome: "untrusted_source",
+        error: "Configured discovery URL is not an allowlisted HTTPS provider origin.",
+      }),
+    };
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -356,20 +430,110 @@ async function discoverFromSource(
   }, timeoutMs);
   try {
     const response = await fetcher(source.url, { signal: controller.signal });
-    if (
-      !response.ok ||
-      !contentTypeIsReadable(response) ||
-      !responseStayedOnTrustedHost(source, response)
-    ) {
-      return null;
+    const finalUrl = response.url ?? source.url;
+    const contentType = response.headers?.get("content-type") ?? null;
+    if (!response.ok) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl,
+          httpStatus: response.status,
+          contentType,
+          bodyBytes: null,
+          bodyHash: null,
+          outcome: "http_error",
+          error: `Official source returned HTTP ${response.status}.`,
+        }),
+      };
+    }
+    if (!responseStayedOnTrustedHost(source, response)) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl,
+          httpStatus: response.status,
+          contentType,
+          bodyBytes: null,
+          bodyHash: null,
+          outcome: "untrusted_redirect",
+          error: "Final response URL is outside the provider allowlist.",
+        }),
+      };
+    }
+    if (!contentTypeIsReadable(response)) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl,
+          httpStatus: response.status,
+          contentType,
+          bodyBytes: null,
+          bodyHash: null,
+          outcome: "unsupported_content_type",
+          error: "Official source did not return readable text, JSON, XML, or JavaScript.",
+        }),
+      };
+    }
+    const advertisedLength = Number(response.headers?.get("content-length"));
+    // Reject a truthful oversized response before materializing its text in
+    // memory. The post-read byte check below remains mandatory because this
+    // header is optional and not trusted as a safety boundary.
+    if (Number.isSafeInteger(advertisedLength) && advertisedLength > MAX_DISCOVERY_DOCUMENT_BYTES) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl,
+          httpStatus: response.status,
+          contentType,
+          bodyBytes: advertisedLength,
+          bodyHash: null,
+          outcome: "oversize_document",
+          error: `Official source advertised ${advertisedLength} bytes, above the ${MAX_DISCOVERY_DOCUMENT_BYTES} byte discovery limit.`,
+        }),
+      };
     }
     const body = await response.text();
-    if (Buffer.byteLength(body, "utf8") > MAX_DISCOVERY_DOCUMENT_BYTES) {
-      return null;
+    const bodyBytes = Buffer.byteLength(body, "utf8");
+    const bodyHash = sha256(body);
+    if (bodyBytes > MAX_DISCOVERY_DOCUMENT_BYTES) {
+      return {
+        extraction: null,
+        receipt: receipt({
+          finalUrl,
+          httpStatus: response.status,
+          contentType,
+          bodyBytes,
+          bodyHash,
+          outcome: "oversize_document",
+          error: `Official source exceeded ${MAX_DISCOVERY_DOCUMENT_BYTES} byte discovery limit.`,
+        }),
+      };
     }
-    return extractCandidates(source, body, observedAt, observations);
-  } catch {
-    return null;
+    return {
+      extraction: extractCandidates(source, body, observedAt, observations),
+      receipt: receipt({
+        finalUrl,
+        httpStatus: response.status,
+        contentType,
+        bodyBytes,
+        bodyHash,
+        outcome: "ok",
+        error: null,
+      }),
+    };
+  } catch (error) {
+    return {
+      extraction: null,
+      receipt: receipt({
+        finalUrl: null,
+        httpStatus: null,
+        contentType: null,
+        bodyBytes: null,
+        bodyHash: null,
+        outcome: "fetch_error",
+        error: error instanceof Error ? error.message : "Unknown fetch error.",
+      }),
+    };
   } finally {
     clearTimeout(timeout);
   }
@@ -415,7 +579,7 @@ export async function refreshKnowledgeUpdates(
   const discoveries = await Promise.all(
     sources.map(async (source) => ({
       source,
-      candidates: await discoverFromSource(
+      result: await discoverFromSource(
         source,
         fetcher,
         options.timeoutMs ?? 15_000,
@@ -425,15 +589,15 @@ export async function refreshKnowledgeUpdates(
     })),
   );
   const unavailableSourceIds = discoveries
-    .filter((entry) => entry.candidates === null)
+    .filter((entry) => entry.result.extraction === null)
     .map((entry) => entry.source.id);
   const candidates = discoveries.flatMap(
-    (entry) => entry.candidates?.candidates ?? [],
+    (entry) => entry.result.extraction?.candidates ?? [],
   );
   const suppressedObservations = [
     ...new Map(
       discoveries
-        .flatMap((entry) => entry.candidates?.suppressedObservations ?? [])
+        .flatMap((entry) => entry.result.extraction?.suppressedObservations ?? [])
         .map((observation) => [
           observationKey(
             observation.kind,
@@ -445,6 +609,55 @@ export async function refreshKnowledgeUpdates(
         ]),
     ).values(),
   ];
+  const receipts = discoveries.map((entry) => entry.result.receipt);
+  const baseline = options.discoveryBaseline;
+  const baselineByKey = new Map(
+    (baseline ?? []).map((entry) => [
+      observationKey(entry.kind, entry.provider, entry.model, entry.surface),
+      entry,
+    ]),
+  );
+  const candidateByKey = new Map(
+    candidates.map((candidate) => [
+      observationKey(candidate.kind, candidate.provider, candidate.model, candidate.surface),
+      candidate,
+    ]),
+  );
+  const newCandidates = baseline === undefined
+    ? candidates
+    : candidates.filter((candidate) => !baselineByKey.has(
+      observationKey(candidate.kind, candidate.provider, candidate.model, candidate.surface),
+    ));
+  const changedCandidates = baseline === undefined
+    ? []
+    : candidates.filter((candidate) => {
+      const prior = baselineByKey.get(
+        observationKey(candidate.kind, candidate.provider, candidate.model, candidate.surface),
+      );
+      return prior !== undefined && prior.evidenceHash !== candidate.evidenceHash;
+    });
+  // A source that failed to fetch cannot prove an observation resolved. Only
+  // compare baseline entries for sources that produced a readable receipt.
+  const readableSourceIds = new Set(
+    receipts.filter((entry) => entry.outcome === "ok").map((entry) => entry.sourceId),
+  );
+  const resolvedCandidates = (baseline ?? [])
+    .filter((entry) =>
+      readableSourceIds.has(entry.sourceId) &&
+      !candidateByKey.has(observationKey(entry.kind, entry.provider, entry.model, entry.surface)),
+    )
+    .map((entry) => KnowledgeDiscoveryResolvedEntrySchema.parse({
+      kind: entry.kind,
+      provider: entry.provider,
+      model: entry.model,
+      surface: entry.surface,
+      sourceId: entry.sourceId,
+      previousEvidenceHash: entry.evidenceHash,
+      firstObservedAt: entry.firstObservedAt,
+      lastObservedAt: entry.lastObservedAt,
+      resolvedAt: observedAt,
+      reviewStatus: "discovered_unreviewed",
+    }));
   const changedSourceIds = new Set(
     sourceCheck.checks
       .filter((entry) => entry.status === "changed")
@@ -485,6 +698,13 @@ export async function refreshKnowledgeUpdates(
       candidates,
       suppressedObservations,
       unavailableSourceIds,
+      delta: {
+        baselineStatus: baseline === undefined ? "not_provided" : "compared",
+        newCandidates,
+        changedCandidates,
+        resolvedCandidates,
+      },
+      receipts,
     },
     affectedTargetIds,
     promotion: { status: "pending_review", reasons },

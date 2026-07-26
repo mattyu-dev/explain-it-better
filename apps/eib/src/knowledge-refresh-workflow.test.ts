@@ -37,12 +37,14 @@ describe("scheduled knowledge refresh workflow", () => {
     expect(source).toContain("actions/upload-artifact@");
     expect(source).toContain("retention-days: 30");
 
-    // Drift or an unreachable source must make the refresh visibly fail after
-    // the evidence is uploaded; it cannot be silently treated as current.
+    // Reviewable drift stays visible without permanently failing the scheduled
+    // job; only incomplete official evidence fails after artifact upload.
     expect(source).toMatch(/if: always\(\)/);
     expect(source).toContain(
-      'if [[ "$KNOWLEDGE_REQUIRES_REVIEW" != "false" ]]',
+      'if [[ "$KNOWLEDGE_OUTCOME" == "incomplete" ]]',
     );
+    expect(source).toContain('"needs_review"');
     expect(source).toContain("exit 1");
+    expect(source).toContain("timeout-minutes: 20");
   });
 });

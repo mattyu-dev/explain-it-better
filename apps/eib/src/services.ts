@@ -39,13 +39,16 @@ import {
 import {
   KNOWLEDGE_PACK_VERSION,
   checkKnowledgeSources,
+  createKnowledgePromotionDossier,
   getRulesForProfile,
   getTargetProfile,
+  KnowledgeRefreshReportSchema,
   listTargetProfiles,
   refreshKnowledgeUpdates,
   sourceManifest,
   stageKnowledgeUpdates,
   validateTargetConfiguration,
+  type KnowledgeDiscoveryCandidate,
   type KnowledgeTargetProfile,
 } from "@eib/knowledge";
 import { z } from "zod";
@@ -64,7 +67,13 @@ import {
   writeUserPreferences,
   type UserPreferences,
 } from "./preferences.js";
-import { confirmRuntimeRun, createRuntimeRun } from "./runtime-store.js";
+import {
+  StaleRuntimeRunError,
+  confirmRuntimeRun,
+  createRuntimeRun,
+  readRuntimeRun,
+  type RuntimeRunFreshness,
+} from "./runtime-store.js";
 import {
   resolveRuntimeTarget,
   runtimeTargetCapabilities,
@@ -985,6 +994,7 @@ function transformPreview(options: {
           `- Active runtime: ${runtime.adapterId}; reasoning ${runtime.reasoningMode ?? "surface-managed"}; tools ${runtime.tools.join(", ") || "none"}`,
         ]),
     `- Context mode: ${options.context.mode}; ${included.length} included, ${skipped.length} skipped`,
+    `- Repository snapshot: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}${options.context.repository.status === "dirty" ? ` (${options.context.repository.changedEntries} changed entries)` : ""}`,
     "",
     "## Raw request",
     options.rawRequest,
@@ -1020,6 +1030,7 @@ function handoffBrief(options: {
     "Use the compiled target-specific brief below as the active task.",
     "Inspect the listed project context before making implementation decisions.",
     "Do not make destructive, external, costly, or scope-expanding changes without the user's confirmation.",
+    `Repository snapshot at compilation: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}. Re-run EIB if this context is no longer current.`,
     "",
     "## Selected project context",
     ...(included.length === 0
@@ -1030,6 +1041,26 @@ function handoffBrief(options: {
     options.artifact.content.trim(),
     "",
   ].join("\n");
+}
+
+function runtimeFreshness(
+  context: ContextManifest,
+  targetId: string,
+): Omit<RuntimeRunFreshness, "expiresAt"> {
+  const contextFingerprint = createHash("sha256").update(JSON.stringify({
+    mode: context.mode,
+    root: context.root,
+    repository: context.repository,
+    entries: context.entries.map(({ path, included, reason, sha256, bytes }) => ({ path, included, reason, sha256, bytes })),
+  })).digest("hex");
+  const knowledgeFingerprint = createHash("sha256")
+    .update(`${KNOWLEDGE_PACK_VERSION}:${targetId}`, "utf8")
+    .digest("hex");
+  return {
+    workspaceHead: context.repository.head,
+    contextFingerprint,
+    knowledgeFingerprint,
+  };
 }
 
 async function executeTransform(
@@ -1073,6 +1104,7 @@ async function executeTransform(
     root,
     brief: command.brief,
     deep: command.deep,
+    signal,
   });
   const intent = createFastDraft(original);
   if (resolution.runtime !== undefined) {
@@ -1096,6 +1128,7 @@ async function executeTransform(
     context,
     assumptions: intent.assumptions,
     handoff,
+    freshness: runtimeFreshness(context, resolution.target.id),
   });
   const display = transformPreview({
     rawRequest: command.brief,
@@ -1376,12 +1409,16 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
       assertNotAborted(signal);
       switch (command.name) {
         case "install": {
-          const installed = await installProjectRuntime(workspaceRoot);
+          const installed = await installProjectRuntime(workspaceRoot, { update: command.update });
           return {
             status: "ok",
-            message: installed.created.length === 0
-              ? "EIB project runtime assets are already installed."
-              : `Installed EIB project runtime assets: ${installed.created.join(", ")}.`,
+            message: installed.created.length > 0
+              ? `Installed EIB project runtime assets: ${installed.created.join(", ")}.`
+              : installed.updated.length > 0
+                ? `Updated EIB project runtime assets: ${installed.updated.join(", ")}.`
+                : installed.preserved.length > 0
+                  ? `EIB preserved locally modified assets: ${installed.preserved.join(", ")}.`
+                  : "EIB project runtime assets are already installed.",
             data: installed,
             exitCode: Codes.success,
           };
@@ -1389,7 +1426,31 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
         case "transform":
           return executeTransform(command, signal, workspaceRoot, runtimeEnvironment);
         case "confirm": {
-          const run = await confirmRuntimeRun(workspaceRoot, command.token);
+          const existing = await readRuntimeRun(workspaceRoot, command.token);
+          const currentContext = await discoverProjectContext({
+            root: workspaceRoot,
+            brief: existing.rawRequest,
+            deep: existing.context.mode === "deep",
+            signal,
+          });
+          let run;
+          try {
+            run = await confirmRuntimeRun(
+              workspaceRoot,
+              command.token,
+              runtimeFreshness(currentContext, existing.targetId),
+            );
+          } catch (error) {
+            if (error instanceof StaleRuntimeRunError) {
+              return {
+                status: "needs_input",
+                message: error.message,
+                data: { runToken: command.token, staleReasons: error.reasons, retransformRequired: true },
+                exitCode: Codes.needsInput,
+              };
+            }
+            throw error;
+          }
           const display = [
             "# EIB confirmed handoff",
             "",
@@ -1621,6 +1682,64 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           };
         }
         case "knowledge": {
+          if (command.action === "promote-plan") {
+            const separator = command.candidate!.indexOf("/");
+            const provider = command.candidate!.slice(0, separator).trim();
+            const model = command.candidate!.slice(separator + 1).trim();
+            if (provider.length === 0 || model.length === 0 || model.includes("/")) {
+              throw new CliServiceError(
+                "knowledge promote-plan requires exactly <provider/model>.",
+                Codes.usage,
+              );
+            }
+            let discoveryCandidates: readonly KnowledgeDiscoveryCandidate[] = [];
+            if (command.proposalPath !== undefined) {
+              let proposed: unknown;
+              try {
+                proposed = JSON.parse(await readFile(command.proposalPath, "utf8")) as unknown;
+              } catch (error) {
+                throw new CliServiceError(
+                  `Could not read refresh proposal ${JSON.stringify(command.proposalPath)}.`,
+                  Codes.usage,
+                  error instanceof Error ? { reason: error.message } : undefined,
+                );
+              }
+              const parsedProposal = KnowledgeRefreshReportSchema.safeParse(proposed);
+              if (!parsedProposal.success) {
+                throw new CliServiceError(
+                  `Refresh proposal ${JSON.stringify(command.proposalPath)} is invalid.`,
+                  Codes.usage,
+                  { issues: parsedProposal.error.issues },
+                );
+              }
+              discoveryCandidates = parsedProposal.data.discovery.candidates;
+            }
+            let dossier;
+            try {
+              dossier = createKnowledgePromotionDossier({
+                provider: provider as never,
+                model,
+                discoveryCandidates,
+              });
+            } catch (error) {
+              throw new CliServiceError(
+                `Unknown or invalid promotion candidate ${JSON.stringify(command.candidate)}.`,
+                Codes.usage,
+                error instanceof Error ? { reason: error.message } : undefined,
+              );
+            }
+            const defaultName = `promotion-${provider}-${dossier.candidate.model}.json`;
+            const output = command.output ?? join(".eib", "knowledge", defaultName);
+            const written = await writeJsonExclusive(output, dossier);
+            return {
+              status: "ok",
+              message:
+                `Wrote a non-active promotion dossier at ${written} for ${dossier.candidate.provider}/${dossier.candidate.model}. ` +
+                "No profile, rule, capability, or active knowledge-pack file was changed.",
+              data: { dossier, written },
+              exitCode: Codes.success,
+            };
+          }
           if (command.action === "refresh") {
             const proposal = await abortable(
               (options.knowledgeRefresh ?? refreshKnowledgeUpdates)({

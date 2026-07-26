@@ -28,6 +28,10 @@ use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   producing evidence-only `discovered_unreviewed` candidates and a non-active
   proposal. A weekly read-only workflow uploads that evidence, runs the
   release gate, and requires human review for any drift, outage, or candidate.
+- Evidence-only model promotion dossiers: `eib knowledge promote-plan
+  <provider/model>` captures catalog evidence, source requirements, profile
+  and rule review work, runtime/renderer tests, and evaluation gates without
+  making a discovered model selectable or changing the active pack.
 
 ### Changed
 

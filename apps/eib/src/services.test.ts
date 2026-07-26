@@ -7,6 +7,46 @@ import { getRulesForProfile } from "@eib/knowledge";
 import { createCliServices } from "./services.js";
 
 describe("CLI services", () => {
+  it("writes a non-active Claude Opus 5 promotion dossier without making it selectable", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-promotion-dossier-"));
+    const output = join(root, "opus-5.json");
+    try {
+      const services = createCliServices({ workspaceRoot: root });
+      const result = await services.execute(
+        {
+          name: "knowledge",
+          global: { json: true },
+          action: "promote-plan",
+          candidate: "anthropic/claude-opus-5",
+          output,
+          sourceIds: [],
+        },
+        new AbortController().signal,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.message).toContain("No profile, rule, capability, or active knowledge-pack file was changed");
+      expect(result.data).toMatchObject({
+        dossier: {
+          activation: "blocked_pending_review",
+          candidate: {
+            provider: "anthropic",
+            model: "claude-opus-5",
+            discoveryStatus: "requested_without_catalog_evidence",
+          },
+          promotion: { status: "pending_human_review" },
+        },
+      });
+      const saved = JSON.parse(await readFile(output, "utf8")) as {
+        candidate: { model: string };
+        promotion: { nonActivationGuarantee: string };
+      };
+      expect(saved.candidate.model).toBe("claude-opus-5");
+      expect(saved.promotion.nonActivationGuarantee).toContain("No active knowledge-pack files");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("writes a non-active knowledge refresh proposal without changing the active pack", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-knowledge-refresh-"));
     const output = join(root, "proposal.json");
@@ -110,7 +150,11 @@ describe("CLI services", () => {
     await writeFile(join(root, "package.json"), '{"name":"runtime-fixture"}\n', "utf8");
     const services = createCliServices({
       workspaceRoot: root,
-      runtimeEnvironment: { CODEX_THREAD_ID: "fixture-thread", CODEX_REASONING_EFFORT: "high" },
+      runtimeEnvironment: {
+        CODEX_THREAD_ID: "fixture-thread",
+        CODEX_MODEL: "gpt-5.6",
+        CODEX_REASONING_EFFORT: "high",
+      },
     });
     try {
       const transformed = await services.execute(
@@ -140,6 +184,42 @@ describe("CLI services", () => {
       expect(confirmed.exitCode).toBe(0);
       expect(confirmed.display).toContain("EIB execution contract");
       expect(confirmed.data).toMatchObject({ runToken: token });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a fresh transform when selected context changes before confirmation", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-stale-"));
+    await writeFile(join(root, "AGENTS.md"), "Run tests before changing source files.\n", "utf8");
+    await writeFile(join(root, "package.json"), '{"name":"runtime-fixture"}\n', "utf8");
+    const services = createCliServices({
+      workspaceRoot: root,
+      runtimeEnvironment: { CODEX_THREAD_ID: "fixture-thread", CODEX_MODEL: "gpt-5.6" },
+    });
+    try {
+      const transformed = await services.execute(
+        {
+          name: "transform",
+          global: { json: true },
+          brief: "Review the project architecture and propose changes.",
+          runtime: "auto",
+          deep: false,
+        },
+        new AbortController().signal,
+      );
+      const token = (transformed.data as { runToken: string }).runToken;
+      await writeFile(join(root, "AGENTS.md"), "Do not change source files.\n", "utf8");
+      const confirmation = await services.execute(
+        { name: "confirm", global: { json: true }, token },
+        new AbortController().signal,
+      );
+      expect(confirmation).toMatchObject({
+        status: "needs_input",
+        exitCode: 3,
+        data: { retransformRequired: true },
+      });
+      expect(confirmation.message).toContain("selected context changed");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

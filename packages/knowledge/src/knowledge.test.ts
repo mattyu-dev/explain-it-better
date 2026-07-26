@@ -3,6 +3,7 @@ import { TargetProfileSchema } from "@eib/core";
 import {
   KNOWLEDGE_PACK_VERSION,
   checkKnowledgeSources,
+  createKnowledgePromotionDossier,
   getRulesForProfile,
   getTargetProfile,
   knowledgeRules,
@@ -21,6 +22,47 @@ import {
 } from "./index.js";
 
 describe("reviewed knowledge pack", () => {
+  it("creates a non-active, evidence-bound promotion dossier for Claude Opus 5", () => {
+    const dossier = createKnowledgePromotionDossier({
+      provider: "anthropic",
+      model: "Claude Opus 5",
+      createdAt: "2026-07-26T10:00:00.000Z",
+      discoveryCandidates: [{
+        kind: "model",
+        provider: "anthropic",
+        model: "claude-opus-5",
+        surface: null,
+        sourceId: "anthropic-model-catalog",
+        url: "https://platform.claude.com/docs/en/about-claude/models/overview",
+        evidenceHash: "a".repeat(64),
+        observedAt: "2026-07-26T09:00:00.000Z",
+        evidenceExcerpt: "Claude Opus 5 is listed in the official model overview.",
+        reviewStatus: "discovered_unreviewed",
+      }],
+    });
+
+    expect(dossier).toMatchObject({
+      activation: "blocked_pending_review",
+      candidate: {
+        provider: "anthropic",
+        model: "claude-opus-5",
+        discoveryStatus: "catalog_observed",
+        existingProfileIds: [],
+      },
+      promotion: {
+        status: "pending_human_review",
+        nonActivationGuarantee: "No active knowledge-pack files are changed by this dossier.",
+      },
+    });
+    expect(dossier.requiredTests.join(" ")).toContain("unknown must not fall back");
+    expect(dossier.requiredRuleWork.join(" ")).toContain("Do not copy adjacent-model rules");
+    expect(dossier.sourcePlan.officialCatalogSources).toContainEqual({
+      id: "anthropic-model-catalog",
+      title: "Anthropic model overview",
+      url: "https://platform.claude.com/docs/en/about-claude/models/overview",
+    });
+  });
+
   it("validates every built-in source, profile, rule, and cross-reference", () => {
     const report = validateKnowledgePack();
 
@@ -520,11 +562,113 @@ describe("official knowledge discovery", () => {
       sourceIds: ["openai-model-guidance"],
       checkedAt: "2026-07-26T10:00:00.000Z",
     });
-    expect(unreadable.discovery).toEqual({
+    expect(unreadable.discovery).toMatchObject({
       status: "incomplete",
       candidates: [],
       suppressedObservations: [],
       unavailableSourceIds: ["openai-model-catalog"],
+      delta: { baselineStatus: "not_provided" },
+      receipts: [{
+        sourceId: "openai-model-catalog",
+        outcome: "unsupported_content_type",
+        contentType: "application/pdf",
+      }],
     });
+  });
+
+  it("uses source adapters to reject aliases, historical references, and examples", async () => {
+    const refresh = await refreshKnowledgeUpdates({
+      fetcher: (url) => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(url.includes("/models/")
+          ? [
+              "GPT-5.6 is the current model.",
+              "GPT 9.1 is now available.",
+              "The legacy GPT-10.0 was retired.",
+              "Example: choose GPT-11.0 as your-model-id.",
+            ].join(" ")
+          : "prompt"),
+      }),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+    expect(refresh.discovery.candidates).toMatchObject([
+      { provider: "openai", model: "gpt-9.1", sourceId: "openai-model-catalog" },
+    ]);
+    expect(refresh.discovery.candidates).toHaveLength(1);
+    expect(refresh.discovery.receipts).toMatchObject([
+      { sourceId: "openai-model-catalog", extractorId: "openai-model_catalog-v1", outcome: "ok" },
+    ]);
+  });
+
+  it("categorizes durable evidence as new, changed, or resolved without activation", async () => {
+    const refresh = await refreshKnowledgeUpdates({
+      fetcher: (url) => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(url.includes("/models/") ? "GPT-8.0 and GPT-9.1 are available." : "prompt"),
+      }),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+      discoveryBaseline: [
+        {
+          kind: "model",
+          provider: "openai",
+          model: "gpt-8.0",
+          surface: null,
+          sourceId: "openai-model-catalog",
+          evidenceHash: "a".repeat(64),
+          firstObservedAt: "2026-07-01T10:00:00.000Z",
+          lastObservedAt: "2026-07-20T10:00:00.000Z",
+        },
+        {
+          kind: "model",
+          provider: "openai",
+          model: "gpt-7.0",
+          surface: null,
+          sourceId: "openai-model-catalog",
+          evidenceHash: "b".repeat(64),
+          firstObservedAt: "2026-07-01T10:00:00.000Z",
+          lastObservedAt: "2026-07-20T10:00:00.000Z",
+        },
+      ],
+    });
+    expect(refresh.activation).toBe("blocked_pending_review");
+    expect(refresh.discovery.delta).toMatchObject({
+      baselineStatus: "compared",
+      newCandidates: [{ model: "gpt-9.1" }],
+      changedCandidates: [{ model: "gpt-8.0" }],
+      resolvedCandidates: [{ model: "gpt-7.0", previousEvidenceHash: "b".repeat(64) }],
+    });
+  });
+
+  it("records rejected redirects and oversized documents as receipts", async () => {
+    const redirect = await refreshKnowledgeUpdates({
+      fetcher: () => Promise.resolve({
+        ok: true,
+        status: 200,
+        url: "https://untrusted.example/catalog",
+        text: () => Promise.resolve("GPT-9.1"),
+      }),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+    expect(redirect.discovery.receipts).toMatchObject([
+      { sourceId: "openai-model-catalog", outcome: "untrusted_redirect" },
+    ]);
+
+    const oversized = await refreshKnowledgeUpdates({
+      fetcher: (url) => Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(url.includes("/models/") ? "x".repeat(2 * 1024 * 1024 + 1) : "prompt"),
+      }),
+      sourceIds: ["openai-model-guidance"],
+      checkedAt: "2026-07-26T10:00:00.000Z",
+    });
+    expect(oversized.discovery.receipts).toMatchObject([
+      { sourceId: "openai-model-catalog", outcome: "oversize_document", bodyBytes: 2 * 1024 * 1024 + 1 },
+    ]);
   });
 });

@@ -31,6 +31,7 @@ const VALUE_OPTIONS = new Set([
   "source",
   "target",
   "for",
+  "from",
   "runtime",
 ]);
 
@@ -40,6 +41,7 @@ const FLAG_OPTIONS = new Set([
   "fast",
   "help",
   "json",
+  "update",
   "version",
 ]);
 
@@ -214,11 +216,11 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       }
       return { name: "tui", global };
     case "install":
-      rejectOptions(parsed, [], []);
+      rejectOptions(parsed, [], ["update"]);
       if (parsed.positionals.length !== 0) {
         throw new UsageError("install does not accept positional arguments");
       }
-      return { name: "install", global };
+      return { name: "install", global, update: parsed.flags.has("update") };
     case "transform": {
       rejectOptions(parsed, ["brief", "runtime", "for"], ["deep"]);
       const explicitBrief = one(parsed, "brief");
@@ -471,21 +473,34 @@ export function parseArgs(argv: readonly string[]): CliCommand {
       }
       return { name: "doctor", global };
     case "knowledge": {
-      rejectOptions(parsed, ["output", "source"], []);
+      rejectOptions(parsed, ["output", "source", "from"], []);
       const action = parsed.positionals.shift();
-      if (action !== "check" && action !== "stage" && action !== "refresh") {
-        throw new UsageError("knowledge requires check, stage, or refresh");
+      if (action !== "check" && action !== "stage" && action !== "refresh" && action !== "promote-plan") {
+        throw new UsageError("knowledge requires check, stage, refresh, or promote-plan");
+      }
+      const candidate = action === "promote-plan" ? parsed.positionals.shift() : undefined;
+      if (action === "promote-plan" && (candidate === undefined || !candidate.includes("/"))) {
+        throw new UsageError("knowledge promote-plan requires <provider/model>");
       }
       if (parsed.positionals.length !== 0) {
         throw new UsageError(`knowledge ${action} does not accept positional arguments`);
       }
       const output = one(parsed, "output");
+      const proposalPath = one(parsed, "from");
+      if (action !== "promote-plan" && proposalPath !== undefined) {
+        throw new UsageError("--from is only valid for knowledge promote-plan");
+      }
+      if (action === "promote-plan" && parsed.options.has("source")) {
+        throw new UsageError("--source is not valid for knowledge promote-plan");
+      }
       return {
         name: "knowledge",
         global,
         action,
         ...(output === undefined ? {} : { output }),
         sourceIds: many(parsed, "source"),
+        ...(candidate === undefined ? {} : { candidate }),
+        ...(proposalPath === undefined ? {} : { proposalPath }),
       };
     }
     default:

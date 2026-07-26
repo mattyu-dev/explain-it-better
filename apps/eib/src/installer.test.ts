@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,6 +18,34 @@ describe("project runtime installer", () => {
     ]));
     await expect(readFile(join(root, "AGENTS.md"), "utf8")).resolves.toBe("User-owned instructions\n");
     await expect(installProjectRuntime(root)).resolves.toMatchObject({ created: [] });
+  });
+
+  it("fingerprints assets, updates verified EIB assets, and preserves locally edited EIB assets", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-install-update-"));
+    await installProjectRuntime(root);
+    const skillPath = join(root, ".codex", "skills", "explain-it-better", "SKILL.md");
+    const commandPath = join(root, ".claude", "commands", "eib.md");
+    const installedSkill = await readFile(skillPath, "utf8");
+    expect(installedSkill).toMatch(/EIB-ASSET: codex-skill; VERSION: 2; SHA256: [a-f0-9]{64}/);
+
+    const alteredBody = installedSkill.replace("# Explain It Better", "# Explain It Better (old generated asset)");
+    const withoutHash = alteredBody.replace(/SHA256: [a-f0-9]{64}/, "SHA256: pending");
+    const body = withoutHash
+      .replace(/# Managed by Explain It Better\.\n/, "")
+      .replace(/# EIB-ASSET: codex-skill; VERSION: 2; SHA256: pending\n/, "");
+    const verifiedOldAsset = withoutHash.replace(
+      "SHA256: pending",
+      `SHA256: ${createHash("sha256").update(body).digest("hex")}`,
+    );
+    await writeFile(skillPath, verifiedOldAsset);
+    const locallyEdited = `${await readFile(commandPath, "utf8")}\nLocal change\n`;
+    await writeFile(commandPath, locallyEdited);
+
+    const refreshed = await installProjectRuntime(root, { update: true });
+    expect(refreshed.updated).toContain(".codex/skills/explain-it-better/SKILL.md");
+    expect(refreshed.preserved).toContain(".claude/commands/eib.md");
+    await expect(readFile(skillPath, "utf8")).resolves.toBe(installedSkill);
+    await expect(readFile(commandPath, "utf8")).resolves.toBe(locallyEdited);
   });
 
   it("refuses to overwrite a non-EIB command asset", async () => {

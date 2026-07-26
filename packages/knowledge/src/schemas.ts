@@ -258,6 +258,101 @@ export type KnowledgeDiscoveryCandidate = z.infer<
 >;
 
 /**
+ * A durable, evidence-only catalog baseline. It is intentionally separate
+ * from the reviewed pack: recording an observation must never make a model
+ * addressable by the compiler.
+ */
+export const KnowledgeDiscoveryBaselineEntrySchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("model"),
+    provider: TargetProfileSchema.shape.provider,
+    model: z.string().min(1),
+    surface: z.null(),
+    sourceId: z.string().min(1),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    firstObservedAt: z.iso.datetime(),
+    lastObservedAt: z.iso.datetime(),
+  }),
+  z.object({
+    kind: z.literal("surface"),
+    provider: TargetProfileSchema.shape.provider,
+    model: z.null(),
+    surface: TargetProfileSchema.shape.surface,
+    sourceId: z.string().min(1),
+    evidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    firstObservedAt: z.iso.datetime(),
+    lastObservedAt: z.iso.datetime(),
+  }),
+]);
+export type KnowledgeDiscoveryBaselineEntry = z.infer<
+  typeof KnowledgeDiscoveryBaselineEntrySchema
+>;
+
+/** A baseline entry that was not observed during this refresh. */
+export const KnowledgeDiscoveryResolvedEntrySchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("model"),
+    provider: TargetProfileSchema.shape.provider,
+    model: z.string().min(1),
+    surface: z.null(),
+    sourceId: z.string().min(1),
+    previousEvidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    firstObservedAt: z.iso.datetime(),
+    lastObservedAt: z.iso.datetime(),
+    resolvedAt: z.iso.datetime(),
+    reviewStatus: z.literal("discovered_unreviewed"),
+  }),
+  z.object({
+    kind: z.literal("surface"),
+    provider: TargetProfileSchema.shape.provider,
+    model: z.null(),
+    surface: TargetProfileSchema.shape.surface,
+    sourceId: z.string().min(1),
+    previousEvidenceHash: z.string().regex(/^[a-f0-9]{64}$/),
+    firstObservedAt: z.iso.datetime(),
+    lastObservedAt: z.iso.datetime(),
+    resolvedAt: z.iso.datetime(),
+    reviewStatus: z.literal("discovered_unreviewed"),
+  }),
+]);
+export type KnowledgeDiscoveryResolvedEntry = z.infer<
+  typeof KnowledgeDiscoveryResolvedEntrySchema
+>;
+
+/** A receipt makes fetch failures and parser provenance reviewable. */
+export const KnowledgeDiscoveryFetchReceiptSchema = z.object({
+  sourceId: z.string().min(1),
+  requestedUrl: z.url(),
+  finalUrl: z.url().nullable(),
+  httpStatus: z.number().int().nonnegative().nullable(),
+  contentType: z.string().nullable(),
+  bodyBytes: z.number().int().nonnegative().nullable(),
+  bodyHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  extractorId: z.string().min(1),
+  outcome: z.enum([
+    "ok",
+    "untrusted_source",
+    "untrusted_redirect",
+    "http_error",
+    "unsupported_content_type",
+    "oversize_document",
+    "fetch_error",
+  ]),
+  error: z.string().nullable(),
+});
+export type KnowledgeDiscoveryFetchReceipt = z.infer<
+  typeof KnowledgeDiscoveryFetchReceiptSchema
+>;
+
+export const KnowledgeDiscoveryDeltaSchema = z.object({
+  baselineStatus: z.enum(["not_provided", "compared"]),
+  newCandidates: z.array(KnowledgeDiscoveryCandidateSchema),
+  changedCandidates: z.array(KnowledgeDiscoveryCandidateSchema),
+  resolvedCandidates: z.array(KnowledgeDiscoveryResolvedEntrySchema),
+});
+export type KnowledgeDiscoveryDelta = z.infer<typeof KnowledgeDiscoveryDeltaSchema>;
+
+/**
  * A human-reviewed discovery observation. It suppresses repeat alerts but is
  * not a target profile, capability declaration, or activation mechanism.
  */
@@ -288,6 +383,10 @@ export const KnowledgeDiscoveryReportSchema = z.object({
   candidates: z.array(KnowledgeDiscoveryCandidateSchema),
   suppressedObservations: z.array(KnowledgeDiscoveryObservationSchema),
   unavailableSourceIds: z.array(z.string().min(1)),
+  /** Categorized change set against a caller-provided durable baseline. */
+  delta: KnowledgeDiscoveryDeltaSchema,
+  /** One receipt per attempted official source, including failed attempts. */
+  receipts: z.array(KnowledgeDiscoveryFetchReceiptSchema),
 });
 export type KnowledgeDiscoveryReport = z.infer<
   typeof KnowledgeDiscoveryReportSchema
@@ -316,6 +415,68 @@ export interface KnowledgeRefreshOptions extends KnowledgeCheckOptions {
   readonly discoveredAt?: string;
   /** Reviewed catalog observations used to suppress repeat proposal alerts. */
   readonly reviewedObservations?: readonly KnowledgeDiscoveryObservation[];
+  /**
+   * Previous evidence-only discovery output. Supplying it categorizes model
+   * observations as new, changed, or resolved; it does not activate them.
+   */
+  readonly discoveryBaseline?: readonly KnowledgeDiscoveryBaselineEntry[];
+}
+
+/**
+ * Evidence-only plan for reviewing one discovered model. A dossier is not a
+ * profile, capability claim, rule change, or activation mechanism.
+ */
+export const KnowledgePromotionDossierSchema = z.object({
+  packVersion: z.string().min(1),
+  createdAt: z.iso.datetime(),
+  activation: z.literal("blocked_pending_review"),
+  candidate: z.object({
+    provider: TargetProfileSchema.shape.provider,
+    model: z.string().min(1),
+    discoveryStatus: z.enum([
+      "catalog_observed",
+      "requested_without_catalog_evidence",
+      "already_profiled",
+    ]),
+    discoveryEvidence: z.array(KnowledgeDiscoveryCandidateSchema),
+    existingProfileIds: z.array(z.string().min(1)),
+  }),
+  sourcePlan: z.object({
+    officialCatalogSources: z.array(
+      z.object({ id: z.string().min(1), url: z.url(), title: z.string().min(1) }),
+    ).min(1),
+    reviewedProviderSources: z.array(
+      z.object({ id: z.string().min(1), url: z.url(), title: z.string().min(1) }),
+    ),
+    requiredEvidence: z.array(z.string().min(1)).min(1),
+  }),
+  adjacentProfiles: z.array(
+    z.object({
+      id: z.string().min(1),
+      model: z.string().min(1),
+      surface: TargetProfileSchema.shape.surface,
+      sourceIds: z.array(z.string().min(1)),
+    }),
+  ),
+  requiredProfileFields: z.array(z.string().min(1)).min(1),
+  requiredRuleWork: z.array(z.string().min(1)).min(1),
+  requiredTests: z.array(z.string().min(1)).min(1),
+  requiredEvaluations: z.array(z.string().min(1)).min(1),
+  promotion: z.object({
+    status: z.literal("pending_human_review"),
+    blockers: z.array(z.string().min(1)).min(1),
+    nonActivationGuarantee: z.literal("No active knowledge-pack files are changed by this dossier."),
+  }),
+});
+export type KnowledgePromotionDossier = z.infer<typeof KnowledgePromotionDossierSchema>;
+
+export interface KnowledgePromotionDossierOptions {
+  readonly provider: KnowledgeTargetProfile["provider"];
+  readonly model: string;
+  /** Optional evidence from a prior non-active refresh proposal. */
+  readonly discoveryCandidates?: readonly KnowledgeDiscoveryCandidate[];
+  /** Injectable deterministic clock for tests and offline review tooling. */
+  readonly createdAt?: string;
 }
 
 export interface TargetProfileFilter {

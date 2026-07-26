@@ -24,6 +24,37 @@ describe("project context discovery", () => {
       included: true,
     });
     expect(manifest.entries.find((entry) => entry.path === "README.md")?.inlineContent).toBeUndefined();
+    expect(manifest.entries.find((entry) => entry.path === "README.md")).toMatchObject({
+      excerptContent: "Architecture notes.\n",
+    });
+    expect(manifest.repository).toMatchObject({ head: null, status: "unavailable" });
+  });
+
+  it("bounds scoped prompt content and honours an already-aborted scan", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-context-bounds-"));
+    await writeFile(join(root, "AGENTS.md"), "a".repeat(20 * 1024));
+    await writeFile(join(root, "CLAUDE.md"), "b".repeat(20 * 1024));
+    await writeFile(join(root, "README.md"), "c".repeat(4 * 1024));
+    const manifest = await discoverProjectContext({
+      root,
+      brief: "Review the project architecture.",
+      deep: false,
+    });
+    const visibleBytes = manifest.entries.reduce(
+      (total, entry) => total + Buffer.byteLength(entry.inlineContent ?? entry.excerptContent ?? "", "utf8"),
+      0,
+    );
+    expect(visibleBytes).toBeLessThanOrEqual(32 * 1024);
+    expect(manifest.entries.some((entry) => entry.contentTruncated === true)).toBe(true);
+
+    const controller = new AbortController();
+    controller.abort(new Error("stop context scan"));
+    await expect(discoverProjectContext({
+      root,
+      brief: "Review the project architecture.",
+      deep: true,
+      signal: controller.signal,
+    })).rejects.toThrow("stop context scan");
   });
 
   it("deep mode records every tracked candidate while excluding secret and binary files", async () => {

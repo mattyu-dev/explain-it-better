@@ -17,12 +17,25 @@ export interface RuntimeDescriptor {
   readonly reasoningMode?: string;
   readonly tools: readonly string[];
   readonly permissions: readonly string[];
-  readonly detectionSource: "native_environment" | "adapter_environment" | "profile_default";
+  /**
+   * A detected host is deliberately distinct from a resolved target. When a
+   * host does not expose its exact model, `model` is the non-model sentinel
+   * below and resolution must stop rather than borrowing a profile default.
+   */
+  readonly detectionSource:
+    | "native_environment"
+    | "adapter_environment"
+    | "native_environment_without_exact_model"
+    | "adapter_environment_without_exact_model";
 }
 
 export interface RuntimeAdapterCapability {
   readonly adapterId: RuntimeAdapterId;
   readonly nativeProjectAsset: "skill" | "slash_command" | "none";
+  /** How the host exposes EIB; this is not a claim of active-session injection. */
+  readonly activation: "skill_discovery" | "slash_command" | "cli";
+  /** Native hosts mediate the confirmed handoff; generic adapters copy the brief. */
+  readonly handoff: "host_mediated" | "copy_paste";
   readonly detects: readonly string[];
   readonly providers: readonly string[];
 }
@@ -37,18 +50,24 @@ export const runtimeAdapterCapabilities: readonly RuntimeAdapterCapability[] = [
   {
     adapterId: "codex",
     nativeProjectAsset: "skill",
+    activation: "skill_discovery",
+    handoff: "host_mediated",
     detects: ["CODEX_THREAD_ID", "__CFBundleIdentifier=com.openai.codex"],
     providers: ["openai"],
   },
   {
     adapterId: "claude-code",
     nativeProjectAsset: "slash_command",
+    activation: "slash_command",
+    handoff: "host_mediated",
     detects: ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"],
     providers: ["anthropic"],
   },
   {
     adapterId: "generic-cli",
     nativeProjectAsset: "none",
+    activation: "cli",
+    handoff: "copy_paste",
     detects: ["EIB_RUNTIME_PROVIDER", "EIB_RUNTIME_MODEL", "EIB_RUNTIME_SURFACE"],
     providers: [...new Set(targetProfiles.map((profile) => profile.provider))],
   },
@@ -59,14 +78,13 @@ export function runtimeTargetCapabilities(): RuntimeTargetCapability[] {
   return targetProfiles.map((profile) => ({
     targetId: profile.id,
     provider: profile.provider,
-    integration:
-      profile.id === "openai-gpt-5.6-codex"
+    integration: profile.availability === "target_only"
+      ? "export_only"
+      : profile.provider === "openai" && profile.surface === "coding_cli"
         ? "native_skill"
-        : profile.id === "anthropic-claude-code-sonnet-5"
+        : profile.provider === "anthropic" && profile.surface === "coding_cli"
           ? "native_slash_command"
-          : profile.availability === "target_only"
-            ? "export_only"
-            : "cli_adapter",
+          : "cli_adapter",
   }));
 }
 
@@ -100,6 +118,8 @@ function commaList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
+const UNKNOWN_RUNTIME_VALUE = "<unknown>";
+
 function runtimeFromAdapterEnvironment(
   environment: Readonly<Record<string, string | undefined>>,
 ): RuntimeDescriptor | undefined {
@@ -107,18 +127,20 @@ function runtimeFromAdapterEnvironment(
   const model = nonEmpty(environment.EIB_RUNTIME_MODEL);
   const surface = nonEmpty(environment.EIB_RUNTIME_SURFACE);
   const reasoningMode = nonEmpty(environment.EIB_RUNTIME_REASONING);
-  if (provider === undefined || model === undefined || surface === undefined) return undefined;
+  if (provider === undefined && model === undefined && surface === undefined) return undefined;
   return {
     adapterId: "generic-cli",
-    provider,
-    model,
-    surface,
+    provider: provider ?? UNKNOWN_RUNTIME_VALUE,
+    model: model ?? UNKNOWN_RUNTIME_VALUE,
+    surface: surface ?? UNKNOWN_RUNTIME_VALUE,
     ...(reasoningMode === undefined
       ? {}
       : { reasoningMode }),
     tools: commaList(environment.EIB_RUNTIME_TOOLS),
     permissions: commaList(environment.EIB_RUNTIME_PERMISSIONS),
-    detectionSource: "adapter_environment",
+    detectionSource: model === undefined
+      ? "adapter_environment_without_exact_model"
+      : "adapter_environment",
   };
 }
 
@@ -134,18 +156,19 @@ export function detectRuntime(
     environment.__CFBundleIdentifier === "com.openai.codex"
   ) {
     const reasoningMode = nonEmpty(environment.CODEX_REASONING_EFFORT);
+    const model = nonEmpty(environment.CODEX_MODEL);
     return {
       adapterId: "codex",
       provider: "openai",
-      model: nonEmpty(environment.CODEX_MODEL) ?? "gpt-5.6",
+      model: model ?? UNKNOWN_RUNTIME_VALUE,
       surface: "coding_cli",
       ...(reasoningMode === undefined
         ? {}
         : { reasoningMode }),
       tools: ["filesystem", "terminal"],
       permissions: commaList(environment.CODEX_PERMISSION_PROFILE),
-      detectionSource: nonEmpty(environment.CODEX_MODEL) === undefined
-        ? "profile_default"
+      detectionSource: model === undefined
+        ? "native_environment_without_exact_model"
         : "native_environment",
     };
   }
@@ -155,18 +178,19 @@ export function detectRuntime(
     nonEmpty(environment.CLAUDE_CODE_ENTRYPOINT) !== undefined
   ) {
     const reasoningMode = nonEmpty(environment.CLAUDE_REASONING_MODE);
+    const model = nonEmpty(environment.CLAUDE_MODEL);
     return {
       adapterId: "claude-code",
       provider: "anthropic",
-      model: nonEmpty(environment.CLAUDE_MODEL) ?? "claude-sonnet-5",
+      model: model ?? UNKNOWN_RUNTIME_VALUE,
       surface: "coding_cli",
       ...(reasoningMode === undefined
         ? {}
         : { reasoningMode }),
       tools: ["filesystem", "terminal"],
       permissions: commaList(environment.CLAUDE_CODE_PERMISSIONS),
-      detectionSource: nonEmpty(environment.CLAUDE_MODEL) === undefined
-        ? "profile_default"
+      detectionSource: model === undefined
+        ? "native_environment_without_exact_model"
         : "native_environment",
     };
   }
@@ -197,14 +221,7 @@ function profileForRuntime(runtime: RuntimeDescriptor): KnowledgeTargetProfile |
       profile.model.toLowerCase() === model &&
       profile.surface.toLowerCase() === surface,
   );
-  if (exact.length === 1) return exact[0];
-  const surfaceMatch = targetProfiles.filter(
-    (profile) =>
-      profile.provider.toLowerCase() === provider &&
-      profile.surface.toLowerCase() === surface &&
-      profile.availability === "active",
-  );
-  return surfaceMatch.length === 1 ? surfaceMatch[0] : undefined;
+  return exact.length === 1 ? exact[0] : undefined;
 }
 
 /** Resolve an exact target or stop before emitting target-specific guidance. */
@@ -239,7 +256,9 @@ export async function resolveRuntimeTarget(options: {
     return {
       status: "needs_input",
       runtime,
-      message: `Detected ${runtime.adapterId}, but no reviewed target profile matches ${runtime.provider} ${runtime.model} on ${runtime.surface}. Use --for <target>.`,
+      message: runtime.model === UNKNOWN_RUNTIME_VALUE
+        ? `Detected ${runtime.adapterId}, but its exact active model is unavailable. Select a reviewed target with --for <target>; EIB will not apply target-specific rules by default.`
+        : `Detected ${runtime.adapterId}, but no reviewed target profile matches ${runtime.provider} ${runtime.model} on ${runtime.surface}. Use --for <target>.`,
       capabilities: runtimeAdapterCapabilities,
     };
   }

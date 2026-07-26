@@ -21,6 +21,7 @@ jobs:
   refresh:
     name: Check and stage knowledge review (Node 22)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -63,6 +64,9 @@ jobs:
           const requiresReview =
             proposal.sourceCheck.status !== "current" ||
             proposal.discovery.status !== "current";
+          const incomplete =
+            proposal.sourceCheck.status === "incomplete" ||
+            proposal.discovery.status === "incomplete";
           const summary = [
             "## Knowledge refresh evidence",
             "",
@@ -78,7 +82,10 @@ jobs:
             "The uploaded artifacts are review evidence only. This workflow has read-only permissions and cannot modify the knowledge pack, commit, push, or create a pull request.",
           ].join("\n");
           appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
-          appendFileSync(process.env.GITHUB_OUTPUT, `requires_review=${requiresReview}\n`);
+          appendFileSync(
+            process.env.GITHUB_OUTPUT,
+            `outcome=${incomplete ? "incomplete" : requiresReview ? "needs_review" : "current"}\n`,
+          );
           NODE
 
       - name: Run release validation against the current reviewed pack
@@ -94,12 +101,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Require a reviewed knowledge proposal state
+      - name: Surface knowledge review state
         if: always()
         env:
-          KNOWLEDGE_REQUIRES_REVIEW: ${{ steps.knowledge.outputs.requires_review }}
+          KNOWLEDGE_OUTCOME: ${{ steps.knowledge.outputs.outcome }}
         run: |
-          if [[ "$KNOWLEDGE_REQUIRES_REVIEW" != "false" ]]; then
-            echo "Knowledge refresh requires human review; active knowledge was not changed."
+          if [[ "$KNOWLEDGE_OUTCOME" == "incomplete" ]]; then
+            echo "Knowledge refresh has incomplete official-source evidence."
             exit 1
+          fi
+          if [[ "$KNOWLEDGE_OUTCOME" == "needs_review" ]]; then
+            echo "Knowledge refresh found reviewable evidence; active knowledge was not changed."
           fi

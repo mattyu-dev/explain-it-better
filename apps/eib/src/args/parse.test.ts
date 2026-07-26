@@ -3,6 +3,19 @@ import { parseArgs } from "./parse.js";
 import { UsageError } from "./types.js";
 
 describe("parseArgs", () => {
+  it("parses an explicit safe refresh of project runtime assets", () => {
+    expect(parseArgs(["install", "--update"])).toEqual({
+      name: "install",
+      global: { json: false },
+      update: true,
+    });
+    expect(parseArgs(["install"])).toEqual({
+      name: "install",
+      global: { json: false },
+      update: false,
+    });
+  });
+
   it("parses a proposal-only knowledge refresh", () => {
     expect(parseArgs([
       "knowledge",
@@ -19,7 +32,30 @@ describe("parseArgs", () => {
       output: "review.json",
     });
     expect(() => parseArgs(["knowledge", "activate"])).toThrow(
-      "knowledge requires check, stage, or refresh",
+      "knowledge requires check, stage, refresh, or promote-plan",
+    );
+  });
+
+  it("parses a non-active promotion dossier request", () => {
+    expect(parseArgs([
+      "knowledge",
+      "promote-plan",
+      "anthropic/claude-opus-5",
+      "--from",
+      "refresh.json",
+      "--output",
+      "opus-plan.json",
+    ])).toEqual({
+      name: "knowledge",
+      global: { json: false },
+      action: "promote-plan",
+      candidate: "anthropic/claude-opus-5",
+      proposalPath: "refresh.json",
+      output: "opus-plan.json",
+      sourceIds: [],
+    });
+    expect(() => parseArgs(["knowledge", "promote-plan", "claude-opus-5"])).toThrow(
+      "knowledge promote-plan requires <provider/model>",
     );
   });
 
@@ -159,7 +195,7 @@ describe("parseArgs", () => {
   });
 
   it("parses project-runtime installation and transforms", () => {
-    expect(parseArgs(["install"])).toEqual({ name: "install", global: { json: false } });
+    expect(parseArgs(["install"])).toEqual({ name: "install", global: { json: false }, update: false });
     expect(parseArgs([
       "transform",
       "review the architecture",

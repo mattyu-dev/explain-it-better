@@ -43,6 +43,15 @@ This writes only EIB-owned assets: `.eibrc.json`, a Codex project skill, and
 Claude Code `/eib` and `/eib-deep` commands. It never overwrites `AGENTS.md`,
 `CLAUDE.md`, or another user-owned instruction file.
 
+Codex exposes this as skill discovery; Claude Code exposes slash commands.
+Both are host-mediated: after confirmation, the host follows the returned
+brief. EIB does not claim to inject text into an active model session through
+an unavailable host API.
+
+After upgrading EIB, run `eib install --update`. Every generated host asset is
+versioned and fingerprinted; EIB refreshes only assets whose fingerprint shows
+they were not edited locally, and reports modified assets it safely preserves.
+
 Then transform a natural request without choosing a target manually:
 
 ```bash
@@ -51,7 +60,9 @@ eib transform "review the architecture and tell me what to update" --runtime aut
 
 EIB detects a supported active runtime, resolves its reviewed target profile,
 selects visible project context, and returns a preview plus a run token. It
-does not start work at this point. After reviewing the target, context
+does not start work at this point. EIB requires exact runtime model metadata
+before applying target-specific rules; if the host does not expose it, select
+a reviewed `--for <target>` explicitly. After reviewing the target, context
 manifest, and assumptions:
 
 ```bash
@@ -152,7 +163,7 @@ evaluation cases, scores, provenance, and verification report.
 
 ```text
 eib
-eib install
+eib install [--update]
 eib transform [request] --runtime auto [--deep] [--for <target>]
 eib confirm <run-token>
 eib new [brief] [--target <id>] [--fast] [--output <directory>]
@@ -172,6 +183,7 @@ eib eval [package] --mode live --backend openai --allow-execution
 eib export [package] --format clipboard|directory [--output <directory>]
 eib doctor
 eib knowledge check|stage|refresh
+eib knowledge promote-plan <provider/model> [--from <refresh.json>]
 ```
 
 Every non-interactive command supports `--json`. Exit codes are stable:
@@ -288,6 +300,20 @@ expectation. `eib knowledge check` reports source drift; `eib knowledge stage`
 writes a hash-review artifact; and `eib knowledge refresh` combines drift
 checks with an official provider catalog/release scan. Every result is a
 non-active proposal: it never activates changed rules automatically.
+
+For a discovered model, create a review dossier before any implementation
+work—for example:
+
+```bash
+node apps/eib/dist/cli.js knowledge promote-plan anthropic/claude-opus-5 \
+  --from .eib/knowledge/latest-refresh.json
+```
+
+The dossier records discovery evidence when supplied, adjacent profiles, the
+official-source checklist, required profile/rule work, runtime and renderer
+fixtures, and evaluation gates. It does not make the model selectable or
+modify active profiles, rules, or capabilities. If no refresh evidence is
+supplied, it remains explicitly `requested_without_catalog_evidence`.
 
 ### Scheduled knowledge refresh
 

@@ -1,9 +1,10 @@
 const commandHelp: Readonly<Record<string, string>> = {
-  install: `Usage: eib install [--json]
+  install: `Usage: eib install [--update] [--json]
 
 Install project-local EIB runtime assets. It creates only EIB-owned config,
 Codex skill, and Claude Code slash-command files; existing user instructions
-are never overwritten.`,
+are never overwritten. Use --update to refresh only EIB-owned assets whose
+versioned fingerprint confirms they have not been edited locally.`,
   transform: `Usage: eib transform [request] [options]
 
 Compile a natural request into a runtime-aware agent brief. The normal mode
@@ -87,11 +88,12 @@ Options:
   doctor: `Usage: eib doctor [--json]
 
 Inspect local compiler backends without reading or storing credentials.`,
-  knowledge: `Usage: eib knowledge check|stage|refresh [options]
+  knowledge: `Usage: eib knowledge check|stage|refresh|promote-plan [options]
 
 Options:
   --source <id>           Limit source checks; repeat as needed
   --output <path>         Write the non-active review/proposal artifact
+  --from <refresh.json>   Read discovery evidence for promote-plan only
   --json                  Emit one machine-readable JSON document`,
 };
 
@@ -114,7 +116,7 @@ Usage:
   eib export [package]             Export a paste-ready prompt package
   eib preferences show|set|unset   Manage credential-free CLI defaults
   eib doctor                       Inspect local evaluator readiness
-  eib knowledge check|stage|refresh Review official-source drift and proposals
+  eib knowledge check|stage|refresh|promote-plan Review official-source drift and promotion plans
 
 Global options:
   --json                           Machine-readable output (non-interactive only)
