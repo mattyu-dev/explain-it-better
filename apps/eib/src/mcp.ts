@@ -163,7 +163,7 @@ export async function handleMcpRequest(
         return response(id, {
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "explain-it-better", version: "0.2.0" },
+          serverInfo: { name: "explain-it-better", version: "0.2.1" },
         });
       case "notifications/initialized":
       case "notifications/cancelled":

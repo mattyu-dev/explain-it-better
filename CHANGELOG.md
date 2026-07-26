@@ -6,6 +6,18 @@ All notable changes to this repository are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-26
+
+### Added
+
+- Repository-root Claude Code marketplace catalog and one-command public
+  installation paths for both Codex and Claude Code.
+
+### Fixed
+
+- Documented the remote marketplace commands rather than requiring users to
+  infer them from a local-development checkout.
+
 ## [0.2.0] - 2026-07-26
 
 ### Added
