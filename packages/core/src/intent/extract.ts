@@ -56,12 +56,56 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
+function isWhitespace(character: string | undefined): boolean {
+  return character === " " || character === "\t" || character === "\r" || character === "\n";
+}
+
+function hasConjunctionAfterComma(value: string, index: number): boolean {
+  let cursor = index + 1;
+  if (!isWhitespace(value[cursor])) return false;
+  while (isWhitespace(value[cursor])) cursor += 1;
+  const wordStart = cursor;
+  while (/[A-Za-z]/u.test(value[cursor] ?? "")) cursor += 1;
+  const word = value.slice(wordStart, cursor).toLowerCase();
+  return (word === "and" || word === "or") && !/[A-Za-z]/u.test(value[cursor] ?? "");
+}
+
+function withoutListMarker(value: string): string {
+  const trimmed = value.trimStart();
+  return trimmed.startsWith("-") || trimmed.startsWith("*") ? trimmed.slice(1).trimStart() : trimmed;
+}
+
 function splitList(value: string): string[] {
-  return unique(
-    value
-      .split(/\s*(?:;|,(?!\s+(?:and|or)\b)|\n|\u2022)\s*/u)
-      .map((item) => item.replace(/^[-*]\s*/, "").trim()),
-  );
+  const parts: string[] = [];
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const delimiter = character === ";" || character === "\n" || character === "\u2022" ||
+      (character === "," && !hasConjunctionAfterComma(value, index));
+    if (delimiter) {
+      parts.push(withoutListMarker(value.slice(start, index)));
+      start = index + 1;
+    }
+  }
+  parts.push(withoutListMarker(value.slice(start)));
+  return unique(parts);
+}
+
+function isHeadingName(value: string): boolean {
+  if (value.length === 0 || value.length > 41 || !/[A-Za-z]/u.test(value[0] ?? "")) return false;
+  return [...value].every((character) => /[A-Za-z /-]/u.test(character));
+}
+
+function sectionHeader(line: string): { readonly name: string; readonly value: string } | undefined {
+  let start = 0;
+  if (line.startsWith("-") || line.startsWith("*")) {
+    start += 1;
+    while (isWhitespace(line[start])) start += 1;
+  }
+  const colon = line.indexOf(":", start);
+  if (colon === -1) return undefined;
+  const name = line.slice(start, colon).trim();
+  return isHeadingName(name) ? { name, value: line.slice(colon + 1).trim() } : undefined;
 }
 
 function parseSections(brief: string): Map<string, string[]> {
@@ -88,12 +132,11 @@ function parseSections(brief: string): Map<string, string[]> {
     // Markdown sections (`Deliverables:` followed by one or more list items).
     // We only recognise known headings, so prose such as "Note: ..." cannot
     // accidentally become a structured requirement.
-    const match = /^(?:[-*]\s*)?([a-z][a-z /-]{0,40})\s*:\s*(.*)$/iu.exec(line);
-    const rawName = match?.[1];
-    const name = rawName ? SECTION_ALIASES[rawName.toLowerCase().replace(/\s+/gu, " ")] : undefined;
+    const header = sectionHeader(line);
+    const name = header ? SECTION_ALIASES[header.name.toLowerCase().replace(/\s+/gu, " ")] : undefined;
     if (name) {
       activeSection = name;
-      const rawValue = match?.[2]?.trim();
+      const rawValue = header?.value;
       acceptsPlainContinuation = !rawValue;
       if (rawValue) {
         append(name, rawValue);
@@ -101,7 +144,7 @@ function parseSections(brief: string): Map<string, string[]> {
       continue;
     }
 
-    if (match) {
+    if (header) {
       // An unrecognised heading starts a new prose section. Do not leak it
       // into the preceding structured field.
       activeSection = undefined;
@@ -176,13 +219,25 @@ function inferDeliverables(brief: string): string[] {
 }
 
 function inferExclusions(brief: string): string[] {
-  const matches = brief.matchAll(
-    // A semicolon often separates a prohibition from its required fallback
-    // (for example, "Never invent a value; emit null with evidence").  The
-    // fallback must remain a requirement, not become part of the exclusion.
-    /(?:^|[.;\n])\s*((?:do not|don't|never|avoid|exclude)\b[^.!?\n;]*)/giu,
-  );
-  return unique([...matches].map((match) => match[1] ?? ""));
+  const exclusions: string[] = [];
+  let start = 0;
+  const addCandidate = (end: number): void => {
+    const candidate = brief.slice(start, end).trim();
+    const normalized = candidate.toLowerCase();
+    if (["do not", "don't", "never", "avoid", "exclude"].some(
+      (prefix) => normalized === prefix || normalized.startsWith(`${prefix} `),
+    )) {
+      exclusions.push(candidate);
+    }
+  };
+  for (let index = 0; index < brief.length; index += 1) {
+    if (brief[index] === "." || brief[index] === ";" || brief[index] === "\n") {
+      addCandidate(index);
+      start = index + 1;
+    }
+  }
+  addCandidate(brief.length);
+  return unique(exclusions);
 }
 
 function inferLanguage(brief: string): string {

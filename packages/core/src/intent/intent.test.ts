@@ -57,6 +57,21 @@ describe("adaptive intent compiler", () => {
     expect(intent.deliverables).not.toContain("This is context, not another deliverable.");
   });
 
+  it("preserves coordinated list items and exclusions in a long untrusted brief", () => {
+    const brief = [
+      "Audience: research, and product leads; operators",
+      "Constraints: preserve evidence",
+      "Never invent a value; emit null with evidence.",
+      "Context: ".concat("reviewed input ".repeat(4_000)),
+    ].join("\n");
+
+    const intent = analyzeBrief(brief);
+
+    expect(intent.audience).toEqual(["research, and product leads", "operators"]);
+    expect(intent.constraints).toEqual(["preserve evidence"]);
+    expect(intent.exclusions).toEqual(["Never invent a value"]);
+  });
+
   it("keeps a long explicit return deliverable intact and recognises its requested plan format", () => {
     const brief = [
       "Deeply inspect this Explain It Better repository and its real product purpose.",
