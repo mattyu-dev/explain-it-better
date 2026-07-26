@@ -5,7 +5,7 @@ import { runtimeAdapterCapabilities, runtimeTargetCapabilities } from "./runtime
 
 const MANAGED_MARKER = "Managed by Explain It Better.";
 const CONFIG_VERSION = 1;
-const INSTALL_ASSET_VERSION = 2;
+const INSTALL_ASSET_VERSION = 3;
 
 export interface InstallResult {
   readonly root: string;
@@ -50,19 +50,8 @@ function yamlAsset(assetId: string, body: string): string {
   return `# ${MANAGED_MARKER}\n# EIB-ASSET: ${assetId}; VERSION: ${INSTALL_ASSET_VERSION}; SHA256: ${sha256(body)}\n${body}`;
 }
 
-function codexSkillBody(): string {
-  return `---
-name: explain-it-better
-description: Transform a natural project request into a target-aware, project-contextual agent brief. Use when a user invokes /eib or asks to improve a vague implementation request.
----
-
-# Explain It Better
-
-Run \`eib transform --runtime auto "<the user's request>"\` for normal requests.
-Run \`eib transform --runtime auto --deep "<the user's request>"\` only when the user explicitly invokes \`/eib-deep\`.
-
-Show the preview, target, selected context, and assumptions. Do not start work until the user confirms the returned run token. On confirmation, run \`eib confirm <token>\` and treat the returned handoff brief as the active task.
-`;
+async function portableSkillBody(): Promise<string> {
+  return readFile(new URL("../skills/explain-it-better/SKILL.md", import.meta.url), "utf8");
 }
 
 function claudeCommandBody(deep: boolean): string {
@@ -75,47 +64,49 @@ This command is \`/${command}\`.
 `;
 }
 
-function openAiMetadataBody(): string {
-  return `interface:
-  display_name: "Explain It Better"
-  short_description: "Compile natural project requests into target-aware agent briefs."
-  default_prompt: "Use EIB to transform this request into a project-aware agent brief."
-`;
-}
-
-/** The exact v1 outputs let a previously installed, untouched asset upgrade safely once. */
-function legacyCodexSkill(): string {
-  return codexSkillBody().replace(
-    "---\n\n# Explain It Better",
-    "---\n\n<!-- Managed by Explain It Better. -->\n\n# Explain It Better",
-  );
+async function openAiMetadataBody(): Promise<string> {
+  return readFile(new URL("../skills/explain-it-better/agents/openai.yaml", import.meta.url), "utf8");
 }
 
 function legacyClaudeCommand(deep: boolean): string {
   return `<!-- Managed by Explain It Better. -->\n\n${claudeCommandBody(deep)}`;
 }
 
-function legacyOpenAiMetadata(): string {
-  return `# <!-- Managed by Explain It Better. -->\n${openAiMetadataBody()}`;
-}
-
-function installAssets(): readonly InstallAsset[] {
-  const codexBody = codexSkillBody();
+async function installAssets(): Promise<readonly InstallAsset[]> {
+  const portableSkill = await portableSkillBody();
   const regularClaude = claudeCommandBody(false);
   const deepClaude = claudeCommandBody(true);
-  const metadata = openAiMetadataBody();
+  const metadata = await openAiMetadataBody();
   return [
+    {
+      path: ".agents/skills/explain-it-better/SKILL.md",
+      assetId: "portable-agent-skill",
+      content: codexSkillAsset("portable-agent-skill", portableSkill),
+      legacyContent: "",
+    },
+    {
+      path: ".agents/skills/explain-it-better/agents/openai.yaml",
+      assetId: "portable-agent-skill-metadata",
+      content: yamlAsset("portable-agent-skill-metadata", metadata),
+      legacyContent: "",
+    },
     {
       path: ".codex/skills/explain-it-better/SKILL.md",
       assetId: "codex-skill",
-      content: codexSkillAsset("codex-skill", codexBody),
-      legacyContent: legacyCodexSkill(),
+      content: codexSkillAsset("codex-skill", portableSkill),
+      legacyContent: "",
     },
     {
       path: ".codex/skills/explain-it-better/agents/openai.yaml",
       assetId: "codex-openai-metadata",
       content: yamlAsset("codex-openai-metadata", metadata),
-      legacyContent: legacyOpenAiMetadata(),
+      legacyContent: "",
+    },
+    {
+      path: ".claude/skills/explain-it-better/SKILL.md",
+      assetId: "claude-skill",
+      content: codexSkillAsset("claude-skill", portableSkill),
+      legacyContent: "",
     },
     {
       path: ".claude/commands/eib.md",
@@ -211,7 +202,7 @@ export async function installProjectRuntime(
   }
 
   const result = { created, updated, existing, preserved };
-  for (const asset of installAssets()) {
+  for (const asset of await installAssets()) {
     await installAsset(root, asset, options, result);
   }
   return {

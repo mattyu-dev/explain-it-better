@@ -13,7 +13,7 @@ const workspaces = [
   },
   {
     name: "@eib/cli",
-    required: ["dist/cli.js", "dist/cli.d.ts", "package.json"],
+    required: ["dist/cli.js", "dist/cli.d.ts", "dist/mcp.js", "dist/mcp.d.ts", "skills/explain-it-better/SKILL.md", "skills/explain-it-better/agents/openai.yaml", "package.json"],
   },
 ];
 
@@ -23,9 +23,11 @@ const forbiddenPath = (path) =>
   path.includes("test-fixtures");
 
 const root = resolve(import.meta.dirname, "..");
-const cliMode = statSync(resolve(root, "apps/eib/dist/cli.js")).mode;
-if ((cliMode & 0o111) === 0) {
-  throw new Error("@eib/cli dist/cli.js must be executable so npm-linked eib works.");
+for (const binary of ["cli.js", "mcp.js"]) {
+  const mode = statSync(resolve(root, "apps/eib/dist", binary)).mode;
+  if ((mode & 0o111) === 0) {
+    throw new Error(`@eib/cli dist/${binary} must be executable so npm-linked commands work.`);
+  }
 }
 
 for (const workspace of workspaces) {

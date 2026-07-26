@@ -11,7 +11,6 @@ import {
   acceptRecommendedAssumption,
   answerClarification,
   buildPromptSpec,
-  compileForTarget,
   createFastDraft,
   BlindedComparisonSchema,
   CandidateOptimizationEvidenceSchema,
@@ -31,25 +30,16 @@ import {
   type EvalCase,
   type ExternalEvaluationBackend,
   type PromptPackage,
-  type PromptCandidate,
   type PromptSpec,
   type RenderedTarget,
-  type TargetRenderer,
 } from "@eib/core";
 import {
   KNOWLEDGE_PACK_VERSION,
-  checkKnowledgeSources,
-  createKnowledgePromotionDossier,
-  getRulesForProfile,
   getTargetProfile,
-  KnowledgeRefreshReportSchema,
   listTargetProfiles,
-  refreshKnowledgeUpdates,
   sourceManifest,
-  stageKnowledgeUpdates,
-  validateTargetConfiguration,
-  type KnowledgeDiscoveryCandidate,
   type KnowledgeTargetProfile,
+  type refreshKnowledgeUpdates,
 } from "@eib/knowledge";
 import { z } from "zod";
 import {
@@ -61,35 +51,19 @@ import {
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { resolveAppDataPaths, type AppDataPaths } from "./app-data.js";
 import { installProjectRuntime } from "./installer.js";
-import { contextPromptEntries, discoverProjectContext, type ContextManifest } from "./project-context.js";
 import {
   readUserPreferences,
   writeUserPreferences,
   type UserPreferences,
 } from "./preferences.js";
-import {
-  StaleRuntimeRunError,
-  confirmRuntimeRun,
-  createRuntimeRun,
-  readRuntimeRun,
-  type RuntimeRunFreshness,
-} from "./runtime-store.js";
-import {
-  resolveRuntimeTarget,
-  runtimeTargetCapabilities,
-  type RuntimeResolution,
-} from "./runtime.js";
-import type { CliCommand, ExecutionBackend, ExitCode } from "./args/types.js";
+import { executeRuntimeConfirmation, executeRuntimeTransform } from "./runtime-workflow.js";
+import { executeKnowledgeCommand } from "./knowledge-workflow.js";
+import { compilePrompt } from "./target-renderer.js";
+import { CliServiceError, type CliServiceResult } from "./service-contracts.js";
+import type { CliCommand, ExecutionBackend } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
 
-export interface CliServiceResult {
-  readonly status: "ok" | "needs_input";
-  readonly message: string;
-  readonly data: unknown;
-  readonly exitCode: ExitCode;
-  /** Readable preview for commands whose payload is too rich for one status line. */
-  readonly display?: string;
-}
+export { CliServiceError, type CliServiceResult } from "./service-contracts.js";
 
 export interface CliServices {
   execute(command: Exclude<CliCommand, { name: "tui" | "help" | "version" }>, signal: AbortSignal): Promise<CliServiceResult>;
@@ -121,18 +95,6 @@ export interface CliServiceOptions {
   readonly knowledgeRefresh?: typeof refreshKnowledgeUpdates;
 }
 
-export class CliServiceError extends Error {
-  public readonly exitCode: ExitCode;
-  public readonly details?: unknown;
-
-  public constructor(message: string, exitCode: ExitCode = Codes.error, details?: unknown) {
-    super(message);
-    this.name = "CliServiceError";
-    this.exitCode = exitCode;
-    this.details = details;
-  }
-}
-
 function assertNotAborted(signal: AbortSignal): void {
   if (!signal.aborted) {
     return;
@@ -140,334 +102,6 @@ function assertNotAborted(signal: AbortSignal): void {
   throw signal.reason instanceof Error
     ? signal.reason
     : new DOMException("The operation was cancelled.", "AbortError");
-}
-
-function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    assertNotAborted(signal);
-  }
-  return new Promise<T>((resolvePromise, rejectPromise) => {
-    const onAbort = (): void => {
-      rejectPromise(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new DOMException("The operation was cancelled.", "AbortError"),
-      );
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolvePromise(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        rejectPromise(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
-function targetFilename(profile: KnowledgeTargetProfile): string {
-  if (profile.surface === "chat_app") {
-    return "prompt.md";
-  }
-  if (profile.id.includes("codex")) {
-    return "AGENTS.md";
-  }
-  if (profile.id.includes("claude-code")) {
-    return "CLAUDE.md";
-  }
-  if (profile.id === "kimi-code-cli") {
-    return ".kimi/instructions.md";
-  }
-  if (profile.provider === "hermes") {
-    return ".hermes/skills/explain-it-better/SKILL.md";
-  }
-  if (profile.surface === "open_weights") {
-    return "deployment.json";
-  }
-  return "request.json";
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
-function targetPolicy(
-  profile: KnowledgeTargetProfile,
-  prompt: PromptSpec,
-): {
-  readonly policy: readonly string[];
-  readonly ruleIds: readonly string[];
-} {
-  const rules = getRulesForProfile(profile);
-  return {
-    policy: [
-      ...prompt.guidance.principles,
-      ...rules.map((rule) => `Target-specific rule (${rule.id}): ${rule.rule}`),
-    ],
-    ruleIds: rules.map((rule) => rule.id),
-  };
-}
-
-function promptForProfile(
-  profile: KnowledgeTargetProfile,
-  semanticPrompt: string,
-): string {
-  return profile.provider === "anthropic"
-    ? `<task>\n${escapeXml(semanticPrompt)}\n</task>`
-    : semanticPrompt;
-}
-
-function surfaceAsset(
-  profile: KnowledgeTargetProfile,
-  semanticPrompt: string,
-  prompt: PromptSpec,
-  policy: readonly string[],
-): string {
-  const guidance = [
-    "## Target-specific guidance",
-    ...policy.map((rule) => `- ${rule}`),
-  ].join("\n");
-  const method = [
-    "## Approach",
-    ...prompt.guidance.method.map((step) => `- ${step}`),
-  ].join("\n");
-
-  if (profile.surface === "chat_app") {
-    return [
-      `# Paste-ready prompt for ${profile.model}`,
-      promptForProfile(profile, semanticPrompt),
-      method,
-      guidance,
-    ].join("\n\n");
-  }
-  if (profile.id.includes("codex")) {
-    return [
-      "# Explain It Better — Codex project prompt",
-      "Use this prompt as project guidance; preserve higher-authority instructions.",
-      semanticPrompt,
-      method,
-      guidance,
-    ].join("\n\n");
-  }
-  if (profile.id.includes("claude-code")) {
-    return [
-      "# Explain It Better — Claude Code project instructions",
-      "Treat these as project instructions and preserve higher-authority platform safety policy.",
-      promptForProfile(profile, semanticPrompt),
-      method,
-      guidance,
-    ].join("\n\n");
-  }
-  if (profile.id === "kimi-code-cli") {
-    return [
-      "# Explain It Better — Kimi Code project instructions",
-      semanticPrompt,
-      method,
-      guidance,
-    ].join("\n\n");
-  }
-  if (profile.provider === "hermes") {
-    return [
-      "---",
-      "name: explain-it-better-prompt",
-      "description: Target-aware prompt generated from a human demand.",
-      "---",
-      "",
-      "# Explain It Better prompt",
-      "",
-      semanticPrompt,
-      "",
-      method,
-      "",
-      guidance,
-    ].join("\n");
-  }
-  return [semanticPrompt, method, guidance].join("\n\n");
-}
-
-function apiPayload(
-  profile: KnowledgeTargetProfile,
-  semanticPrompt: string,
-  prompt: PromptSpec,
-  policy: readonly string[],
-): unknown {
-  const outputSchema = prompt.demand.outputContract.schema;
-  const renderedPrompt = promptForProfile(profile, semanticPrompt);
-  const renderedPolicy = policy.join("\n");
-
-  switch (profile.apiStyle) {
-    case "responses":
-      return {
-        model: profile.model,
-        instructions: renderedPolicy,
-        input: renderedPrompt,
-        reasoning: { effort: profile.reasoning.defaultMode },
-        ...(outputSchema === undefined
-          ? {}
-          : { text: { format: { type: "json_schema", name: "result", schema: outputSchema } } }),
-      };
-    case "messages":
-      return {
-        model: profile.model,
-        system: renderedPolicy,
-        messages: [{ role: "user", content: renderedPrompt }],
-        thinking: { type: profile.reasoning.defaultMode },
-        ...(outputSchema === undefined
-          ? {}
-          : { output_config: { format: { type: "json_schema", schema: outputSchema } } }),
-      };
-    case "generate_content":
-      return {
-        model: profile.model,
-        systemInstruction: { parts: [{ text: renderedPolicy }] },
-        contents: [{ role: "user", parts: [{ text: renderedPrompt }] }],
-        generationConfig: {
-          thinkingConfig: {
-            thinkingLevel: profile.reasoning.defaultMode.toUpperCase(),
-          },
-          ...(outputSchema === undefined
-            ? {}
-            : {
-                responseMimeType: "application/json",
-                responseSchema: outputSchema,
-              }),
-        },
-      };
-    case "openai_compatible":
-      return {
-        model: profile.model,
-        messages: [
-          { role: "system", content: renderedPolicy },
-          { role: "user", content: renderedPrompt },
-        ],
-        ...(outputSchema === undefined
-          ? {}
-          : {
-              response_format: {
-                type: "json_schema",
-                json_schema: { name: "result", schema: outputSchema },
-              },
-            }),
-        ...(profile.provider === "kimi" && profile.model === "kimi-k3"
-          ? { reasoning_effort: profile.reasoning.defaultMode }
-          : {}),
-        ...(profile.provider === "kimi" && profile.model === "kimi-k2.6"
-          ? {
-              thinking: {
-                type: profile.reasoning.defaultMode === "instant" ? "disabled" : "enabled",
-              },
-            }
-          : {}),
-        ...(profile.provider === "kimi" && profile.model === "kimi-k2.7-code"
-          ? { thinking: { type: "enabled" } }
-          : {}),
-      };
-    case "chat_template":
-      return {
-        model: profile.model,
-        endpoint: profile.endpoint,
-        serializer: {
-          strategy: "tokenizer.apply_chat_template",
-          instructions: profile.serialization,
-          rawControlTokensInSemanticPrompt: false,
-        },
-        messages: [
-          { role: "system", content: renderedPolicy },
-          { role: "user", content: renderedPrompt },
-        ],
-        continuationPolicy: profile.continuationPolicy,
-        capabilityProbeRequired: true,
-        ...(outputSchema === undefined ? {} : { outputSchema }),
-      };
-    case "surface_asset":
-      return surfaceAsset(profile, semanticPrompt, prompt, policy);
-  }
-}
-
-function createTargetRenderer(profile: KnowledgeTargetProfile): TargetRenderer {
-  return {
-    id: `eib-cli-${profile.id}`,
-    supports(candidate): boolean {
-      return candidate.id === profile.id;
-    },
-    render(context): RenderedTarget {
-      const filename = targetFilename(profile);
-      const isJson = filename.endsWith(".json");
-      const target = targetPolicy(profile, context.prompt);
-      const payload = apiPayload(
-        profile,
-        context.candidate.semanticPrompt,
-        context.prompt,
-        target.policy,
-      );
-      const content = isJson
-        ? `${JSON.stringify(payload, null, 2)}\n`
-        : `${String(payload).trim()}\n`;
-      return {
-        targetId: profile.id,
-        filename,
-        content,
-        mimeType: isJson ? "application/json" : "text/markdown",
-        warnings: [
-          ...profile.notes,
-          ...profile.forbiddenCombinations.map((value) => `Target restriction: ${value}`),
-        ],
-        appliedRuleIds: [...target.ruleIds],
-      };
-    },
-  };
-}
-
-function compilePrompt(
-  prompt: PromptSpec,
-  targets: readonly string[],
-  signal: AbortSignal,
-  candidate?: PromptCandidate,
-): RenderedTarget[] {
-  return targets.map((targetId) => {
-    assertNotAborted(signal);
-    const profile = getTargetProfile(targetId);
-    const roles = profile.apiStyle === "responses"
-      ? ["developer", "user"] as const
-      : profile.surface === "chat_app"
-        ? ["user"] as const
-        : profile.provider === "openai" && profile.surface === "coding_cli"
-          ? ["developer", "user"] as const
-          : ["system", "user"] as const;
-    const estimatedInputTokens = Math.ceil(JSON.stringify(prompt.demand).length / 4);
-    const conformance = validateTargetConfiguration(profile, {
-      roles,
-      reasoningMode: profile.reasoning.defaultMode,
-      tools: false,
-      structuredOutput: prompt.demand.outputContract.schema !== undefined,
-      image: false,
-      video: false,
-      contextTokens: estimatedInputTokens,
-      toolChoiceMode: null,
-      dynamicTools: false,
-      strictToolSchemas: false,
-    });
-    if (!conformance.valid) {
-      throw new CliServiceError(
-        `Target ${targetId} cannot represent this prompt's requested output.`,
-        Codes.usage,
-        conformance,
-      );
-    }
-    return compileForTarget(prompt, profile, {
-      renderer: createTargetRenderer(profile),
-      requestedReasoningMode: profile.reasoning.defaultMode,
-      requestedRoles: [...roles],
-      estimatedInputTokens,
-      ...(candidate === undefined ? {} : { candidate }),
-    });
-  });
 }
 
 function portableArtifact(artifact: RenderedTarget): PromptPackage["artifacts"][number] {
@@ -971,193 +605,6 @@ async function executeNew(
   };
 }
 
-function transformPreview(options: {
-  readonly rawRequest: string;
-  readonly target: KnowledgeTargetProfile;
-  readonly resolution: RuntimeResolution;
-  readonly context: ContextManifest;
-  readonly assumptions: readonly string[];
-  readonly handoff: string;
-  readonly token: string;
-}): string {
-  const included = options.context.entries.filter((entry) => entry.included);
-  const skipped = options.context.entries.filter((entry) => !entry.included);
-  const runtime = options.resolution.runtime;
-  return [
-    "# EIB compiled task preview",
-    "",
-    `- Target: \`${options.target.id}\` (${options.target.provider} ${options.target.model}; ${options.target.surface})`,
-    `- Target selection: ${options.resolution.selectionSource ?? "unresolved"}`,
-    ...(runtime === undefined
-      ? []
-      : [
-          `- Active runtime: ${runtime.adapterId}; reasoning ${runtime.reasoningMode ?? "surface-managed"}; tools ${runtime.tools.join(", ") || "none"}`,
-        ]),
-    `- Context mode: ${options.context.mode}; ${included.length} included, ${skipped.length} skipped`,
-    `- Repository snapshot: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}${options.context.repository.status === "dirty" ? ` (${options.context.repository.changedEntries} changed entries)` : ""}`,
-    "",
-    "## Raw request",
-    options.rawRequest,
-    "",
-    "## Visible assumptions",
-    ...(options.assumptions.length === 0 ? ["- None"] : options.assumptions.map((item) => `- ${item}`)),
-    "",
-    "## Context manifest",
-    ...(options.context.entries.length === 0
-      ? ["- No eligible project files were found."]
-      : options.context.entries.map(
-          (entry) =>
-            `- ${entry.included ? "included" : "skipped"}: \`${entry.path}\` (${entry.reason}${entry.sha256 === undefined ? "" : `; ${entry.sha256}`})`,
-        )),
-    "",
-    "## Confirmation",
-    `Review the brief below. To hand it to the active agent, run \`eib confirm ${options.token}\`.`,
-    "",
-    "## Compiled agent brief",
-    options.handoff,
-    "",
-  ].join("\n");
-}
-
-function handoffBrief(options: {
-  readonly artifact: RenderedTarget;
-  readonly context: ContextManifest;
-}): string {
-  const included = options.context.entries.filter((entry) => entry.included);
-  return [
-    "# EIB execution contract",
-    "",
-    "Use the compiled target-specific brief below as the active task.",
-    "Inspect the listed project context before making implementation decisions.",
-    "Do not make destructive, external, costly, or scope-expanding changes without the user's confirmation.",
-    `Repository snapshot at compilation: ${options.context.repository.head ?? "not a Git worktree"}; ${options.context.repository.status}. Re-run EIB if this context is no longer current.`,
-    "",
-    "## Selected project context",
-    ...(included.length === 0
-      ? ["- No eligible project context was selected."]
-      : included.map((entry) => `- \`${entry.path}\` (${entry.reason}; sha256 ${entry.sha256})`)),
-    "",
-    "## Target-specific brief",
-    options.artifact.content.trim(),
-    "",
-  ].join("\n");
-}
-
-function runtimeFreshness(
-  context: ContextManifest,
-  targetId: string,
-): Omit<RuntimeRunFreshness, "expiresAt"> {
-  const contextFingerprint = createHash("sha256").update(JSON.stringify({
-    mode: context.mode,
-    root: context.root,
-    repository: context.repository,
-    entries: context.entries.map(({ path, included, reason, sha256, bytes }) => ({ path, included, reason, sha256, bytes })),
-  })).digest("hex");
-  const knowledgeFingerprint = createHash("sha256")
-    .update(`${KNOWLEDGE_PACK_VERSION}:${targetId}`, "utf8")
-    .digest("hex");
-  return {
-    workspaceHead: context.repository.head,
-    contextFingerprint,
-    knowledgeFingerprint,
-  };
-}
-
-async function executeTransform(
-  command: Extract<CliCommand, { name: "transform" }>,
-  signal: AbortSignal,
-  root: string,
-  environment: Readonly<Record<string, string | undefined>>,
-): Promise<CliServiceResult> {
-  if (command.brief === undefined || !command.brief.trim()) {
-    return {
-      status: "needs_input",
-      message: "Describe what you want the active agent to achieve.",
-      data: { field: "brief", question: "What should EIB transform into an agent brief?" },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const original = analyzeBrief(command.brief);
-  const blocking = original.unresolvedAmbiguity.find((item) => item.impact === "blocking");
-  if (blocking !== undefined) {
-    return {
-      status: "needs_input",
-      message: blocking.question,
-      data: { intent: original, question: blocking },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const resolution = await resolveRuntimeTarget({
-    root,
-    ...(command.explicitTarget === undefined ? {} : { explicitTarget: command.explicitTarget }),
-    environment,
-  });
-  if (resolution.status === "needs_input" || resolution.target === undefined) {
-    return {
-      status: "needs_input",
-      message: resolution.message,
-      data: { resolution },
-      exitCode: Codes.needsInput,
-    };
-  }
-  const context = await discoverProjectContext({
-    root,
-    brief: command.brief,
-    deep: command.deep,
-    signal,
-  });
-  const intent = createFastDraft(original);
-  if (resolution.runtime !== undefined) {
-    intent.preferences = [
-      ...intent.preferences,
-      `Active runtime: ${resolution.runtime.adapterId}; reasoning mode: ${resolution.runtime.reasoningMode ?? "surface-managed"}; tools: ${resolution.runtime.tools.join(", ") || "none"}; permissions: ${resolution.runtime.permissions.join(", ") || "unspecified"}.`,
-    ];
-  }
-  intent.context = [...intent.context, ...contextPromptEntries(context)];
-  const prompt = buildPromptSpec(intent);
-  const artifact = compilePrompt(prompt, [resolution.target.id], signal)[0];
-  if (artifact === undefined) {
-    throw new CliServiceError("No target artifact was produced for the resolved runtime.");
-  }
-  const handoff = handoffBrief({ artifact, context });
-  const run = await createRuntimeRun({
-    root,
-    rawRequest: command.brief,
-    targetId: resolution.target.id,
-    ...(resolution.runtime === undefined ? {} : { runtime: resolution.runtime }),
-    context,
-    assumptions: intent.assumptions,
-    handoff,
-    freshness: runtimeFreshness(context, resolution.target.id),
-  });
-  const display = transformPreview({
-    rawRequest: command.brief,
-    target: resolution.target,
-    resolution,
-    context,
-    assumptions: intent.assumptions,
-    handoff,
-    token: run.token,
-  });
-  return {
-    status: "ok",
-    message: `Compiled a ${command.deep ? "deep" : "scoped"} runtime brief for ${resolution.target.id}. Confirmation required.`,
-    data: {
-      runToken: run.token,
-      target: resolution.target,
-      runtime: resolution.runtime,
-      targetSelection: resolution.selectionSource,
-      context,
-      assumptions: intent.assumptions,
-      handoff,
-      capabilities: resolution.capabilities,
-      targetCapabilities: runtimeTargetCapabilities(),
-    },
-    display,
-    exitCode: Codes.success,
-  };
-}
-
 async function executeImprove(
   command: Extract<CliCommand, { name: "improve" }>,
   signal: AbortSignal,
@@ -1424,49 +871,13 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
           };
         }
         case "transform":
-          return executeTransform(command, signal, workspaceRoot, runtimeEnvironment);
-        case "confirm": {
-          const existing = await readRuntimeRun(workspaceRoot, command.token);
-          const currentContext = await discoverProjectContext({
+          return executeRuntimeTransform(command, signal, {
             root: workspaceRoot,
-            brief: existing.rawRequest,
-            deep: existing.context.mode === "deep",
-            signal,
+            environment: runtimeEnvironment,
+            compilePrompt,
           });
-          let run;
-          try {
-            run = await confirmRuntimeRun(
-              workspaceRoot,
-              command.token,
-              runtimeFreshness(currentContext, existing.targetId),
-            );
-          } catch (error) {
-            if (error instanceof StaleRuntimeRunError) {
-              return {
-                status: "needs_input",
-                message: error.message,
-                data: { runToken: command.token, staleReasons: error.reasons, retransformRequired: true },
-                exitCode: Codes.needsInput,
-              };
-            }
-            throw error;
-          }
-          const display = [
-            "# EIB confirmed handoff",
-            "",
-            `Run token \`${run.token}\` is confirmed. Follow this brief as the active task:`,
-            "",
-            run.handoff,
-            "",
-          ].join("\n");
-          return {
-            status: "ok",
-            message: `Confirmed runtime brief ${run.token}.`,
-            data: { runToken: run.token, confirmedAt: run.confirmedAt, handoff: run.handoff },
-            display,
-            exitCode: Codes.success,
-          };
-        }
+        case "confirm":
+          return executeRuntimeConfirmation(command, signal, workspaceRoot);
         case "new": {
           const { preferences } = await readUserPreferences(appDataPaths.preferencesFile);
           return executeNew(command, signal, preferences.defaultTarget);
@@ -1681,122 +1092,12 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             exitCode: Codes.success,
           };
         }
-        case "knowledge": {
-          if (command.action === "promote-plan") {
-            const separator = command.candidate!.indexOf("/");
-            const provider = command.candidate!.slice(0, separator).trim();
-            const model = command.candidate!.slice(separator + 1).trim();
-            if (provider.length === 0 || model.length === 0 || model.includes("/")) {
-              throw new CliServiceError(
-                "knowledge promote-plan requires exactly <provider/model>.",
-                Codes.usage,
-              );
-            }
-            let discoveryCandidates: readonly KnowledgeDiscoveryCandidate[] = [];
-            if (command.proposalPath !== undefined) {
-              let proposed: unknown;
-              try {
-                proposed = JSON.parse(await readFile(command.proposalPath, "utf8")) as unknown;
-              } catch (error) {
-                throw new CliServiceError(
-                  `Could not read refresh proposal ${JSON.stringify(command.proposalPath)}.`,
-                  Codes.usage,
-                  error instanceof Error ? { reason: error.message } : undefined,
-                );
-              }
-              const parsedProposal = KnowledgeRefreshReportSchema.safeParse(proposed);
-              if (!parsedProposal.success) {
-                throw new CliServiceError(
-                  `Refresh proposal ${JSON.stringify(command.proposalPath)} is invalid.`,
-                  Codes.usage,
-                  { issues: parsedProposal.error.issues },
-                );
-              }
-              discoveryCandidates = parsedProposal.data.discovery.candidates;
-            }
-            let dossier;
-            try {
-              dossier = createKnowledgePromotionDossier({
-                provider: provider as never,
-                model,
-                discoveryCandidates,
-              });
-            } catch (error) {
-              throw new CliServiceError(
-                `Unknown or invalid promotion candidate ${JSON.stringify(command.candidate)}.`,
-                Codes.usage,
-                error instanceof Error ? { reason: error.message } : undefined,
-              );
-            }
-            const defaultName = `promotion-${provider}-${dossier.candidate.model}.json`;
-            const output = command.output ?? join(".eib", "knowledge", defaultName);
-            const written = await writeJsonExclusive(output, dossier);
-            return {
-              status: "ok",
-              message:
-                `Wrote a non-active promotion dossier at ${written} for ${dossier.candidate.provider}/${dossier.candidate.model}. ` +
-                "No profile, rule, capability, or active knowledge-pack file was changed.",
-              data: { dossier, written },
-              exitCode: Codes.success,
-            };
-          }
-          if (command.action === "refresh") {
-            const proposal = await abortable(
-              (options.knowledgeRefresh ?? refreshKnowledgeUpdates)({
-                ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),
-              }),
-              signal,
-            );
-            assertNotAborted(signal);
-            const defaultName = `refresh-${proposal.refreshedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`;
-            const output = command.output ?? join(".eib", "knowledge", defaultName);
-            const written = await writeJsonExclusive(output, proposal);
-            const candidateCount = proposal.discovery.candidates.length;
-            const affectedTargetCount = proposal.affectedTargetIds.length;
-            const incomplete =
-              proposal.sourceCheck.status === "incomplete" ||
-              proposal.discovery.unavailableSourceIds.length > 0;
-            return {
-              status: "ok",
-              message:
-                `Wrote a non-active knowledge refresh proposal at ${written} ` +
-                `(${candidateCount} discovered candidate${candidateCount === 1 ? "" : "s"}; ` +
-                `${affectedTargetCount} affected target${affectedTargetCount === 1 ? "" : "s"}). ` +
-                "Activation remains blocked pending source and rule review.",
-              data: { proposal, written },
-              // Partial source evidence is useful, but never promotable.
-              exitCode: incomplete ? Codes.error : Codes.success,
-            };
-          }
-          const report = await abortable(
-            checkKnowledgeSources({
-              ...(command.sourceIds.length === 0 ? {} : { sourceIds: command.sourceIds }),
-            }),
+        case "knowledge":
+          return executeKnowledgeCommand(
+            command,
             signal,
+            options.knowledgeRefresh === undefined ? {} : { refresh: options.knowledgeRefresh },
           );
-          assertNotAborted(signal);
-          if (command.action === "check") {
-            return {
-              status: "ok",
-              message:
-                report.status === "current"
-                  ? "Knowledge sources match the reviewed manifest."
-                  : `Knowledge source status: ${report.status}.`,
-              data: report,
-              exitCode: report.status === "current" ? Codes.success : Codes.error,
-            };
-          }
-          const staged = stageKnowledgeUpdates({ report });
-          const defaultName = `staged-${staged.stagedAt.replaceAll(":", "-").replaceAll(".", "-")}.json`;
-          const output = command.output ?? join(".eib", "knowledge", defaultName);
-          const written = await writeJsonExclusive(output, staged);
-          return {
-            status: "ok",
-            message: `Staged a non-active knowledge review at ${written}.`,
-            data: { staged, written },
-            exitCode: report.status === "incomplete" ? Codes.error : Codes.success,
-          };
-        }
       }
     },
   };

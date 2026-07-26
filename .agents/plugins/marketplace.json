@@ -1,0 +1,20 @@
+{
+  "name": "explain-it-better",
+  "interface": {
+    "displayName": "Explain It Better"
+  },
+  "plugins": [
+    {
+      "name": "explain-it-better",
+      "source": {
+        "source": "local",
+        "path": "./plugins/explain-it-better"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

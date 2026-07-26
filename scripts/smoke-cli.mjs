@@ -20,4 +20,4 @@ try {
   await rm(directory, { recursive: true, force: true });
 }
 
-process.stdout.write("npm-linked eib CLI symlink smoke test passed\n");
+process.stdout.write("eib CLI entrypoint symlink smoke test passed\n");

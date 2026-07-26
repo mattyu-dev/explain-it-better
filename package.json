@@ -1,8 +1,8 @@
 {
   "name": "explain-it-better",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "A local, provider-aware intent-to-agent compiler.",
+  "description": "A portable, confirmation-gated Agent Skill with optional local Power mode.",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "npm@10.9.8",
@@ -11,12 +11,14 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run clean && tsc -b && node scripts/mark-cli-executable.mjs",
+    "build": "npm run skills:sync && npm run clean && tsc -b && node scripts/mark-cli-executable.mjs",
     "clean": "node scripts/clean-build.mjs",
     "dev": "npm run dev --workspace @eib/cli",
     "lint": "eslint .",
     "pack:check": "node scripts/validate-package-contents.mjs",
-    "release:check": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run smoke:cli && npm run pack:check && npm audit --audit-level=high",
+    "release:check": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run skills:check && npm run smoke:cli && npm run pack:check && npm audit --audit-level=high",
+    "skills:sync": "node scripts/sync-skill-distributions.mjs",
+    "skills:check": "node scripts/sync-skill-distributions.mjs --check",
     "smoke:cli": "node scripts/smoke-cli.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
