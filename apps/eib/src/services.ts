@@ -16,12 +16,14 @@ import {
   CandidateOptimizationEvidenceSchema,
   CandidateOptimizationPlanSchema,
   CandidateEvaluationRunSchema,
+  createProofReceipt,
   evaluateStatic,
   exportPromptPackage,
   generateDemandSpecificEvaluationSuite,
   generatePromptCandidates,
   readPromptPackage,
   runExternalEvaluation,
+  sha256Text,
   selectBestTestedCandidate,
   selectNextQuestion,
   writePromptPackage,
@@ -51,6 +53,7 @@ import {
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { resolveAppDataPaths, type AppDataPaths } from "./app-data.js";
 import { installProjectRuntime } from "./installer.js";
+import { SafePathError, safeWorkspacePath, writeNewText } from "./safe-path.js";
 import {
   readUserPreferences,
   writeUserPreferences,
@@ -1026,6 +1029,78 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             message: `${command.mode} evaluation ${report.passed ? "passed" : "failed"} using ${command.backend}.`,
             data: { ...report, written },
             exitCode: report.passed ? Codes.success : Codes.error,
+          };
+        }
+        case "prove": {
+          const sourcePath = await latestProjectPackage(command.packagePath);
+          const source = await readPromptPackage(sourcePath);
+          const fixtures = await readStaticFixtures(command.fixtures);
+          const staticReport = evaluateStatic(source, fixtures);
+          const rendered = compilePrompt(
+            source.prompt,
+            [...new Set(source.artifacts.map((artifact) => artifact.targetId))],
+            signal,
+          );
+          const renderedByTarget = new Map(rendered.map((artifact) => [artifact.targetId, artifact]));
+          const artifacts = source.artifacts.map((artifact) => {
+            const current = renderedByTarget.get(artifact.targetId);
+            const storedContentHash = sha256Text(artifact.content);
+            const renderedContentHash = sha256Text(current?.content ?? "");
+            return {
+              targetId: artifact.targetId,
+              filename: artifact.filename,
+              storedContentHash,
+              renderedContentHash,
+              passed:
+                current !== undefined &&
+                current.filename === artifact.filename &&
+                current.mimeType === artifact.mimeType &&
+                storedContentHash === renderedContentHash,
+            };
+          });
+          const receipt = createProofReceipt({
+            promptPackage: staticReport.promptPackage,
+            static: {
+              passed: staticReport.passed,
+              findings: staticReport.findings.map((finding) => ({
+                code: finding.code,
+                severity: finding.severity,
+              })),
+            },
+            artifacts,
+            observations: staticReport.results.map((result) => ({
+              caseId: result.caseId,
+              targetId: result.targetId,
+              outputHash: sha256Text(fixtures[result.caseId] ?? ""),
+              passed: result.passed,
+              checks: [{ id: "static_result", passed: result.passed }],
+            })),
+          });
+          let output: string;
+          try {
+            output = await safeWorkspacePath(workspaceRoot, command.output, "proof receipt path");
+            await writeNewText(output, `${JSON.stringify(receipt, null, 2)}\n`, 0o600, "proof receipt path");
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new CliServiceError(
+              `Could not write proof receipt: ${reason}`,
+              error instanceof SafePathError ? Codes.usage : Codes.error,
+            );
+          }
+          return {
+            status: "ok",
+            message: receipt.status === "passed"
+              ? `Local reproducibility proof passed and wrote ${output}.`
+              : `Local reproducibility proof failed; wrote evidence to ${output}.`,
+            data: {
+              receipt,
+              output,
+              limitations: [
+                "No model or host integration was executed.",
+                "This receipt proves only local fixture checks and artifact reproducibility.",
+              ],
+            },
+            exitCode: receipt.status === "passed" ? Codes.success : Codes.error,
           };
         }
         case "export": {

@@ -6,6 +6,14 @@ All notable changes to this repository are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Added `eib prove`, a local-only reproducibility receipt for complete static
+  fixture evidence. It binds the frozen package, evaluation suite, knowledge
+  revision, and every re-rendered compiled artifact with tamper-evident hashes,
+  writes a new private receipt for CI, and explicitly does not claim live model
+  or installed-host verification.
+
 ### Fixed
 
 - Bound local Power-mode MCP operations to their launch workspace, made project

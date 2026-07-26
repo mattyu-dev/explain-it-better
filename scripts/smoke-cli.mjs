@@ -13,7 +13,7 @@ try {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
   });
-  if (!output.includes("eib transform [request]")) {
+  if (!output.includes("eib transform [request]") || !output.includes("eib prove [package]")) {
     throw new Error("The npm-linked eib CLI did not render its help output.");
   }
 } finally {

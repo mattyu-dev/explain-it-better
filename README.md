@@ -224,7 +224,7 @@ The built CLI is the command reference; it is validated in the release gate.
 Run `eib --help`, then `eib <command> --help`, for the exact syntax supported
 by the installed version. The command groups are: project integration
 (`install`, `transform`, `confirm`); prompt packages (`new`, `improve`,
-`compile`, `export`); evidence (`optimize`, `eval`); local readiness
+`compile`, `export`); evidence (`optimize`, `eval`, `prove`); local readiness
 (`preferences`, `doctor`); and reviewed knowledge (`knowledge`).
 
 Every non-interactive command supports `--json`. Exit codes are stable: `0`
@@ -243,6 +243,27 @@ evidence needed to reproduce the result.
 deterministic fixtures. It establishes that those checks pass, not that a
 model response is high quality. Static evidence can support package integrity,
 but cannot by itself promote a prompt.
+
+### Local reproducibility proof
+
+`eib prove` turns complete static fixture evidence into a tamper-evident,
+workspace-local receipt for CI. It re-renders every stored target artifact and
+fails if even one byte, filename, MIME type, fixture check, or deterministic
+package assertion differs. The receipt stores hashes rather than raw prompt or
+fixture-output text, never changes the source package, and is created once at
+a new relative path with restrictive file permissions:
+
+```bash
+node apps/eib/dist/cli.js prove .eib/packages/research-memo \
+  --fixtures static-fixtures.json \
+  --output .eib/proofs/research-memo.json
+```
+
+This proves **local reproducibility only**. It does not call a model, inspect
+an installed Codex/Claude/desktop integration, test tools or side effects, or
+guarantee behavior after a provider update. A failed but complete run still
+writes its receipt and exits `1`, so CI retains the evidence while blocking the
+change. Incomplete or malformed evidence fails closed without a green receipt.
 
 `eib eval --mode proxy` can ask an authenticated local Codex or Claude CLI to
 judge cases when `--allow-execution` is explicit. This is independent evaluator

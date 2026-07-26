@@ -175,4 +175,42 @@ describe("runCli", () => {
     expect(output.stderr()).toBe("");
   });
 
+  it("passes proof fixtures and an explicit receipt destination to services", async () => {
+    const output = capture();
+    const proofServices: CliServices = {
+      listTargets: () => [],
+      execute(command) {
+        expect(command).toMatchObject({
+          name: "prove",
+          packagePath: "package",
+          fixtures: "outputs.json",
+          output: ".eib/proofs/receipt.json",
+        });
+        return Promise.resolve({
+          status: "ok",
+          message: "Local reproducibility proof passed.",
+          data: { receipt: { status: "passed" } },
+          exitCode: ExitCode.success,
+        });
+      },
+    };
+
+    await expect(
+      runCli([
+        "prove",
+        "package",
+        "--fixtures",
+        "outputs.json",
+        "--output",
+        ".eib/proofs/receipt.json",
+        "--json",
+      ], output.io, proofServices),
+    ).resolves.toBe(ExitCode.success);
+    expect(JSON.parse(output.stdout())).toMatchObject({
+      ok: true,
+      command: "prove",
+      data: { receipt: { status: "passed" } },
+    });
+  });
+
 });

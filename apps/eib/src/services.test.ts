@@ -363,6 +363,87 @@ describe("CLI services", () => {
     }
   });
 
+  it("writes a redacted local reproducibility receipt without mutating the source package", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-proof-"));
+    const destination = join(root, "package");
+    const fixturesPath = join(root, "outputs.json");
+    const services = createCliServices({ workspaceRoot: root });
+    const signal = new AbortController().signal;
+    try {
+      await services.execute(
+        {
+          name: "new",
+          global: { json: true },
+          brief: "Write a concise JSON launch checklist.",
+          fast: true,
+          targets: ["openai-gpt-5.6-api"],
+          output: destination,
+          outputSchema: {
+            type: "object",
+            properties: { answer: { type: "string" } },
+            required: ["answer"],
+            additionalProperties: false,
+          },
+        },
+        signal,
+      );
+      const sourceBefore = await readFile(join(destination, "prompt-package.json"), "utf8");
+      const source = await readPromptPackage(destination);
+      const fixtures = Object.fromEntries(source.evals.map((evalCase) => [
+        evalCase.id,
+        evalCase.category === "output_schema" ? '{"answer":"ok"}' : "answer",
+      ]));
+      await writeFile(fixturesPath, JSON.stringify(fixtures), "utf8");
+
+      const proved = await services.execute(
+        {
+          name: "prove",
+          global: { json: true },
+          packagePath: destination,
+          fixtures: fixturesPath,
+          output: ".eib/proofs/receipt.json",
+        },
+        signal,
+      );
+      expect(proved.exitCode).toBe(0);
+      expect(proved.data).toMatchObject({ receipt: { status: "passed" } });
+      const receiptText = await readFile(join(root, ".eib/proofs/receipt.json"), "utf8");
+      expect(receiptText).toContain('"status": "passed"');
+      expect(receiptText).not.toContain('"answer":"ok"');
+      expect(await readFile(join(destination, "prompt-package.json"), "utf8")).toBe(sourceBefore);
+
+      const failedFixtures = { ...fixtures, [source.evals.find((evalCase) => evalCase.category === "output_schema")!.id]: "not-json" };
+      await writeFile(fixturesPath, JSON.stringify(failedFixtures), "utf8");
+      const failed = await services.execute(
+        {
+          name: "prove",
+          global: { json: true },
+          packagePath: destination,
+          fixtures: fixturesPath,
+          output: ".eib/proofs/failed.json",
+        },
+        signal,
+      );
+      expect(failed.exitCode).toBe(1);
+      expect(failed.data).toMatchObject({ receipt: { status: "failed" } });
+
+      await expect(
+        services.execute(
+          {
+            name: "prove",
+            global: { json: true },
+            packagePath: destination,
+            fixtures: fixturesPath,
+            output: "../outside.json",
+          },
+          signal,
+        ),
+      ).rejects.toThrow("outside workspace");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("turns material improvement feedback into a regression before recompiling", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-services-"));
     const source = join(root, "source");

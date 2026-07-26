@@ -75,6 +75,16 @@ Options:
   --fixtures <json-file>  Static outputs keyed by every evaluation case ID
   --allow-execution       Explicit consent required before any model run
   --json                  Emit one machine-readable JSON document`,
+  prove: `Usage: eib prove [package] --fixtures <json-file> --output <relative-receipt.json> [--json]
+
+Create a deterministic local reproducibility receipt. It validates complete
+fixture evidence and confirms the current compiler reproduces every stored
+artifact byte-for-byte. It never calls a model or proves an installed host.
+
+Options:
+  --fixtures <json-file>  Output fixtures keyed by every evaluation case
+  --output <path>         New workspace-relative receipt path; never overwritten
+  --json                  Emit one machine-readable JSON document`,
   export: `Usage: eib export [package] --format directory|clipboard [options]
 
 Options:
@@ -113,6 +123,7 @@ Usage:
   eib optimize [package]           Compare candidates and gate a best-tested prompt
   eib compile [package] --target   Adapt the prompt for an exact model/surface
   eib eval [package]               Validate a prompt statically or with consent
+  eib prove [package]              Emit a local reproducibility receipt for CI
   eib export [package]             Export a paste-ready prompt package
   eib preferences show|set|unset   Manage credential-free CLI defaults
   eib doctor                       Inspect local evaluator readiness

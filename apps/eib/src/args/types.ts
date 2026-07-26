@@ -102,6 +102,17 @@ export type CliCommand =
       allowExecution: boolean;
     }
   | {
+      /**
+       * Emits a local reproducibility receipt. This command never contacts a
+       * model or attests to an installed host integration.
+       */
+      name: "prove";
+      global: GlobalOptions;
+      packagePath: string;
+      fixtures: string;
+      output: string;
+    }
+  | {
       name: "export";
       global: GlobalOptions;
       packagePath: string;
