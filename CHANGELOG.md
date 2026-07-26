@@ -6,6 +6,25 @@ All notable changes to this repository are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Added `eib prove`, a local-only reproducibility receipt for complete static
+  fixture evidence. It binds the frozen package, evaluation suite, knowledge
+  revision, and every re-rendered compiled artifact with tamper-evident hashes,
+  writes a new private receipt for CI, and explicitly does not claim live model
+  or installed-host verification.
+
+### Fixed
+
+- Bound local Power-mode MCP operations to their launch workspace, made project
+  context metadata-only, and hardened managed writes against symlink escapes.
+- Removed unreachable backend factories and unused distribution metadata while
+  preserving target-only profiles, doctor safeguards, and active host assets.
+- Made the README describe the actual Claude-only slash commands and local
+  stdio MCP boundary; it no longer implies a remote MCP service is shipped.
+- Added a pre-build Skill parity check to the scheduled knowledge-refresh
+  workflow so mutable synchronization cannot conceal stale distribution files.
+
 ## [0.2.1] - 2026-07-26
 
 ### Added

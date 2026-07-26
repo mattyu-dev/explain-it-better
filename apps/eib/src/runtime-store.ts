@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
 import type { ContextManifest } from "./project-context.js";
 import type { RuntimeDescriptor } from "./runtime.js";
+import { safeWorkspacePath, replaceTextAtomically, writeNewText } from "./safe-path.js";
 
 export const RUNTIME_RUN_TTL_MS = 30 * 60 * 1000;
 
@@ -65,17 +66,17 @@ export class StaleRuntimeRunError extends Error {
   }
 }
 
-function runDirectory(root: string): string {
-  return join(resolve(root), ".eib", "runtime-runs");
+async function runDirectory(root: string): Promise<string> {
+  return safeWorkspacePath(root, ".eib/runtime-runs", "runtime state path");
 }
 
-function runPath(root: string, token: string): string {
+async function runPath(root: string, token: string): Promise<string> {
   if (!/^[a-f0-9-]{36}$/iu.test(token)) throw new Error("Invalid runtime run token.");
-  return join(runDirectory(root), `${token}.json`);
+  return safeWorkspacePath(root, join(".eib", "runtime-runs", `${token}.json`), "runtime state path");
 }
 
 export async function readRuntimeRun(root: string, token: string): Promise<RuntimeRun> {
-  return RuntimeRunSchema.parse(JSON.parse(await readFile(runPath(root, token), "utf8")) as unknown);
+  return RuntimeRunSchema.parse(JSON.parse(await readFile(await runPath(root, token), "utf8")) as unknown);
 }
 
 export async function createRuntimeRun(options: {
@@ -106,10 +107,9 @@ export async function createRuntimeRun(options: {
     assumptions: [...options.assumptions],
     handoff: options.handoff,
   });
-  const directory = runDirectory(options.root);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const file = runPath(options.root, run.token);
-  await writeFile(file, `${JSON.stringify(run, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  await runDirectory(options.root);
+  const file = await runPath(options.root, run.token);
+  await writeNewText(file, `${JSON.stringify(run, null, 2)}\n`, 0o600, "runtime state path");
   return run;
 }
 
@@ -119,7 +119,7 @@ export async function confirmRuntimeRun(
   currentFreshness: Omit<RuntimeRunFreshness, "expiresAt">,
   now = new Date(),
 ): Promise<RuntimeRun> {
-  const file = runPath(root, token);
+  const file = await runPath(root, token);
   const run = await readRuntimeRun(root, token);
   const reasons = [
     ...(new Date(run.freshness.expiresAt).getTime() <= now.getTime() ? ["confirmation window expired"] : []),
@@ -130,8 +130,6 @@ export async function confirmRuntimeRun(
   if (reasons.length > 0) throw new StaleRuntimeRunError(reasons);
   if (run.confirmedAt !== undefined) return run;
   const confirmed = RuntimeRunSchema.parse({ ...run, confirmedAt: new Date().toISOString() });
-  const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
-  await writeFile(temporary, `${JSON.stringify(confirmed, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  await rename(temporary, file);
+  await replaceTextAtomically(file, `${JSON.stringify(confirmed, null, 2)}\n`, 0o600, "runtime state path");
   return confirmed;
 }

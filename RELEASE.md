@@ -3,7 +3,7 @@
 EIB has two distributable layers:
 
 - **Core Skill:** the portable source bundle in `skills/explain-it-better`,
-  distributed through the skills-only Codex/ChatGPT plugin and the separate
+  distributed through the skills-only Codex plugin and the separate
   Claude Code plugin.
 - **Power mode:** the private local Node workspace that adds `eib`, `eib-mcp`,
   target-aware rendering, project-context selection, and evaluation.
@@ -13,11 +13,11 @@ an npm package. All workspaces remain `private: true` deliberately. A release
 is a reviewed, versioned Git commit (and, when the repository is public, an
 appropriate GitHub Release), never an implied `npm publish` operation.
 
-## Before the first push
+## Repository security baseline
 
-1. Create the GitHub repository with no generated README, license, or
-   `.gitignore`; decide its visibility before advertising installation links.
-2. Add it as `origin`, push `main`, then protect `main`: require a pull request,
+1. Keep the public repository's visibility, description, support route, and
+   release links current before advertising installation commands.
+2. Protect `main`: require a pull request,
    one approving review, and the `Release gate (Node 22)` status check.
 3. Grant the minimum repository access needed by maintainers and CI. The
    workflow needs only read access to repository contents.

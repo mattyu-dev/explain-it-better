@@ -1,4 +1,0 @@
-interface:
-  display_name: "Explain It Better"
-  short_description: "Turn vague requests into confirmed action briefs."
-  default_prompt: "Use $explain-it-better to turn my request into a confirmed execution brief."

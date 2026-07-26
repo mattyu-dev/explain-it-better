@@ -8,12 +8,35 @@ const sourceFiles = [
   "agents/openai.yaml",
 ];
 const destinations = [
-  "apps/eib/skills/explain-it-better",
-  "plugins/explain-it-better/skills/explain-it-better",
-  "claude-plugin/explain-it-better/skills/explain-it-better",
+  { path: "apps/eib/skills/explain-it-better", files: sourceFiles },
+  { path: "plugins/explain-it-better/skills/explain-it-better", files: sourceFiles },
+  // Claude Code consumes SKILL.md only; OpenAI app metadata is not a Claude
+  // plugin contract and must not be shipped as dead distribution surface.
+  { path: "claude-plugin/explain-it-better/skills/explain-it-better", files: ["SKILL.md"] },
 ];
 
 const sourceRoot = resolve(root, "skills/explain-it-better");
+const rootPackage = JSON.parse(await readFile(resolve(root, "package.json"), "utf8"));
+const releaseVersion = rootPackage.version;
+if (typeof releaseVersion !== "string" || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u.test(releaseVersion)) {
+  throw new Error("Root package version must be a semantic version.");
+}
+const versionedPackages = ["apps/eib/package.json", "packages/core/package.json", "packages/knowledge/package.json"];
+for (const relativePath of versionedPackages) {
+  const manifest = JSON.parse(await readFile(resolve(root, relativePath), "utf8"));
+  if (manifest.version !== releaseVersion) {
+    throw new Error(`${relativePath} must match root release version ${releaseVersion}.`);
+  }
+  for (const [name, version] of Object.entries(manifest.dependencies ?? {})) {
+    if (name.startsWith("@eib/") && version !== releaseVersion) {
+      throw new Error(`${relativePath} dependency ${name} must match root release version ${releaseVersion}.`);
+    }
+  }
+}
+const cliTypes = await readFile(resolve(root, "apps/eib/src/args/types.ts"), "utf8");
+if (!cliTypes.includes(`EIB_VERSION = "${releaseVersion}"`)) {
+  throw new Error("CLI runtime version must match the root package version.");
+}
 const contents = await Promise.all(sourceFiles.map(async (file) => [
   file,
   await readFile(resolve(sourceRoot, file), "utf8"),
@@ -34,7 +57,8 @@ for (const forbidden of [/`eib(?:-mcp)?\b/u, /eib_prepare/u, /eib_confirm/u]) {
 const stale = [];
 for (const destination of destinations) {
   for (const [file, expected] of contents) {
-    const target = resolve(root, destination, file);
+    if (!destination.files.includes(file)) continue;
+    const target = resolve(root, destination.path, file);
     let current;
     try {
       current = await readFile(target, "utf8");
@@ -43,10 +67,10 @@ for (const destination of destinations) {
     }
     if (current === expected) continue;
     if (checkOnly) {
-      stale.push(`${destination}/${file}`);
+      stale.push(`${destination.path}/${file}`);
       continue;
     }
-    await mkdir(resolve(root, destination, file, ".."), { recursive: true });
+    await mkdir(resolve(root, destination.path, file, ".."), { recursive: true });
     await writeFile(target, expected, "utf8");
   }
 }
@@ -57,6 +81,9 @@ if (stale.length > 0) {
 
 if (checkOnly) {
   const plugin = JSON.parse(await readFile(resolve(root, "plugins/explain-it-better/.codex-plugin/plugin.json"), "utf8"));
+  if (plugin.version !== releaseVersion) {
+    throw new Error("The Codex plugin must match the root release version.");
+  }
   if (plugin.mcpServers !== undefined || plugin.apps !== undefined) {
     throw new Error("The core Codex/ChatGPT plugin must remain skills-only.");
   }
@@ -76,6 +103,9 @@ if (checkOnly) {
   }
   if (claudeMarketplace.version !== claudePlugin.version || claudeEntry.version !== claudePlugin.version) {
     throw new Error("The public Claude marketplace and its plugin must share one release version.");
+  }
+  if (claudePlugin.version !== releaseVersion) {
+    throw new Error("The Claude plugin and marketplace must match the root release version.");
   }
 }
 

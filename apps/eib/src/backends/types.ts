@@ -59,15 +59,6 @@ export interface LocalCompilerBackend {
   runStructured<T>(request: StructuredRunRequest<T>): Promise<StructuredRunResult<T>>;
 }
 
-export interface TargetOnlyBackend {
-  readonly id: "hermes" | "kimi";
-  readonly role: "target_only";
-  readonly executable: string;
-  readonly compilerReady: false;
-  readonly safetyReason: string;
-  runStructured<T>(request: StructuredRunRequest<T>): Promise<StructuredRunResult<T>>;
-}
-
 export interface BackendFactoryOptions {
   executable?: string;
   env?: NodeJS.ProcessEnv;

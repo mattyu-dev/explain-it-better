@@ -185,6 +185,29 @@ describe("parseArgs", () => {
     ).toThrow("--fixtures is only valid for static evaluation");
   });
 
+  it("requires complete local evidence and a new receipt destination for proof", () => {
+    expect(parseArgs([
+      "prove",
+      "package",
+      "--fixtures",
+      "outputs.json",
+      "--output",
+      ".eib/proofs/receipt.json",
+    ])).toEqual({
+      name: "prove",
+      global: { json: false },
+      packagePath: "package",
+      fixtures: "outputs.json",
+      output: ".eib/proofs/receipt.json",
+    });
+    expect(() => parseArgs(["prove", "package", "--output", "receipt.json"])).toThrow(
+      "prove requires --fixtures",
+    );
+    expect(() => parseArgs(["prove", "package", "--fixtures", "outputs.json"])).toThrow(
+      "prove requires --output",
+    );
+  });
+
   it("rejects external-execution options in static mode", () => {
     expect(() =>
       parseArgs(["eval", "--mode", "static", "--backend", "codex"]),

@@ -419,6 +419,24 @@ export function parseArgs(argv: readonly string[]): CliCommand {
         allowExecution: parsed.flags.has("allow-execution"),
       };
     }
+    case "prove": {
+      rejectOptions(parsed, ["fixtures", "output"], []);
+      const fixtures = one(parsed, "fixtures");
+      const output = one(parsed, "output");
+      if (fixtures === undefined) {
+        throw new UsageError("prove requires --fixtures <json-file>");
+      }
+      if (output === undefined) {
+        throw new UsageError("prove requires --output <relative-receipt.json>");
+      }
+      return {
+        name: "prove",
+        global,
+        packagePath: packagePath(parsed.positionals, "prove"),
+        fixtures,
+        output,
+      };
+    }
     case "export": {
       rejectOptions(parsed, ["format", "output"], []);
       const formatValue = one(parsed, "format") ?? "directory";

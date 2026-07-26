@@ -6,12 +6,12 @@ perform the confirmed task. The core Skill works without a shell, plugin tool,
 repository, network connection, or host-specific API.
 
 ```text
-rough request → visible brief → explicit confirmation → same-agent handoff
+rough request → visible brief → explicit confirmation → same-conversation handoff
 ```
 
 The optional **Power mode** adds the local `eib` CLI, target-aware rendering,
-safe project-context selection, reproducible packages, evaluation, and MCP
-tools. It is an enhancement, never a requirement for the core Skill.
+safe project-context selection, reproducible packages, evaluation, and a local
+stdio MCP server. It is an enhancement, never a requirement for the core Skill.
 
 Power mode's reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI,
 DeepSeek, Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally
@@ -21,10 +21,10 @@ excluded.
 
 Use the canonical bundle at
 [`skills/explain-it-better`](skills/explain-it-better). It is the source for
-the Codex/ChatGPT plugin and the Claude Code plugin:
+the Codex plugin and the Claude Code plugin:
 
 ```text
-ChatGPT/Codex: plugins/explain-it-better
+Codex plugin: plugins/explain-it-better
 Claude Code:  claude-plugin/explain-it-better
 ```
 
@@ -37,13 +37,26 @@ Install from the public marketplaces—no clone or shell is required for the
 core Skill:
 
 ```bash
-# Codex / ChatGPT Codex
+# Codex CLI
 codex plugin marketplace add mattyu-dev/explain-it-better
 codex plugin add explain-it-better@explain-it-better
 
 # Claude Code
 claude plugin marketplace add mattyu-dev/explain-it-better
 claude plugin install explain-it-better@explain-it-better
+```
+
+Verified hosts are Codex CLI and Claude Code. ChatGPT and Claude desktop/web
+surfaces may support Skill or plugin import, but availability and installation
+routes depend on the account, workspace policy, plan, and current client UI;
+they are not validated by these marketplace commands.
+
+Update marketplace installations with:
+
+```bash
+codex plugin marketplace upgrade explain-it-better
+claude plugin marketplace update explain-it-better
+claude plugin update explain-it-better@explain-it-better
 ```
 
 Start a new conversation after installation so the host can discover the
@@ -69,18 +82,19 @@ eib install
 ```
 
 This writes the portable Skill to `.agents/skills`, `.codex/skills`, and
-`.claude/skills`, plus optional `/eib` and `/eib-deep` Power-mode Claude Code
-commands. It never overwrites `AGENTS.md`, `CLAUDE.md`, or another user-owned
-instruction file.
+`.claude/skills`, plus `/eib` and `/eib-deep` commands for **Claude Code**.
+Other hosts receive the portable confirmation-gated Skill, not a CLI-backed
+slash command. It never overwrites `AGENTS.md`, `CLAUDE.md`, or another
+user-owned instruction file.
 
 ### Compatibility
 
 | Surface | Core Skill | Power mode |
 | --- | --- | --- |
-| ChatGPT/Codex plugin | Yes | No local project access implied |
-| Claude Code plugin | Yes | Optional CLI commands |
-| Any local MCP host | Not required | `eib-mcp` stdio server |
-| Remote chat apps | Yes, where they support Skill import | Requires a separately hosted authenticated MCP service for engine tools |
+| Codex CLI marketplace | Verified | No local project access implied |
+| Claude Code marketplace | Verified | Optional CLI commands |
+| ChatGPT or Claude desktop/web import | Account- and UI-dependent | No local project access implied |
+| Local MCP host (manual configuration) | Not required | `eib-mcp` stdio server |
 
 After upgrading EIB, run `eib install --update`. Every generated host asset is
 versioned and fingerprinted; EIB refreshes only assets whose fingerprint shows
@@ -103,17 +117,28 @@ manifest, and assumptions:
 eib confirm <run-token>
 ```
 
-`confirm` returns the exact handoff brief for the active agent. Use
-`/eib "request"` in an installed supported host; use
-`/eib-deep "complex request"` only when an explicit full tracked-repository
-scan is appropriate. The CLI equivalent is `eib transform --deep …`.
+`confirm` returns the exact handoff brief for the active agent. In Claude Code,
+use `/eib "request"`; use `/eib-deep "complex request"` only when an explicit
+full tracked-repository scan is appropriate. The portable Skill on other hosts
+uses its same-conversation confirmation flow. The CLI equivalent is
+`eib transform --deep …`.
 
-Scoped mode reads project instructions, manifests, and request-relevant files.
-Deep mode scans tracked readable text files and records every included or
-skipped path. Both reject ignored/generated directories, binary files,
-secret-named paths, and detected secret content. If the runtime cannot be
-identified exactly, EIB asks for `--for <target>` rather than pretending its
-prompt is target-specific.
+### Local MCP
+
+`eib-mcp` is a local stdio server, not a hosted remote service. Configure it in
+an MCP-capable host with command `eib-mcp` and a working directory set to the
+project it may inspect. Its workspace is fixed at launch: clients cannot supply
+or redirect a workspace through tool arguments. The server returns preparation
+and acknowledgement handoffs only; the host remains responsible for collecting
+the user's explicit approval before it calls `eib_confirm`.
+
+Scoped mode records metadata for project instructions, manifests, and
+request-relevant files; Power mode does not copy their raw text into a host
+response or runtime record. Deep mode scans tracked readable text files and
+records every included or skipped path. Both reject ignored/generated
+directories, binary files, secret-named paths, and conservative detected
+credential content. If the runtime cannot be identified exactly, EIB asks for
+`--for <target>` rather than pretending its prompt is target-specific.
 
 Start with a demand and target. EIB parses the demand into visible fields such
 as outcome, audience, deliverable, constraints, inputs, exclusions, success
@@ -193,36 +218,17 @@ The resulting bundle is useful evidence, not an application to deploy. It
 contains the original demand, clarification lineage, rendered prompt,
 evaluation cases, scores, provenance, and verification report.
 
-## Commands
+## CLI reference
 
-```text
-eib
-eib install [--update]
-eib-mcp
-eib transform [request] --runtime auto [--deep] [--for <target>]
-eib confirm <run-token>
-eib new [brief] [--target <id>] [--fast] [--output <directory>]
-        [--schema '<JSON object>']
-eib improve <package> --feedback <correction> [--output <directory>]
-eib optimize [package] [--target <id>] [--max-candidates 1|2|3]
-             [--runs <json-file> [--comparisons <json-file>]
-              | --backend codex|claude|openai --allow-execution
-                [--depth quick|default|deep]]
-             [--minimum-improvement <n>] [--output <evidence.json>]
-eib compile [package] --target <id> [--output <directory>]
-eib eval [package] --mode static [--fixtures <json-file>]
-eib eval [package] --mode proxy --backend codex|claude --allow-execution
-         [--depth quick|default|deep]
-eib eval [package] --mode live --backend openai --allow-execution
-         [--depth quick|default|deep]
-eib export [package] --format clipboard|directory [--output <directory>]
-eib doctor
-eib knowledge check|stage|refresh
-eib knowledge promote-plan <provider/model> [--from <refresh.json>]
-```
+The built CLI is the command reference; it is validated in the release gate.
+Run `eib --help`, then `eib <command> --help`, for the exact syntax supported
+by the installed version. The command groups are: project integration
+(`install`, `transform`, `confirm`); prompt packages (`new`, `improve`,
+`compile`, `export`); evidence (`optimize`, `eval`, `prove`); local readiness
+(`preferences`, `doctor`); and reviewed knowledge (`knowledge`).
 
-Every non-interactive command supports `--json`. Exit codes are stable:
-`0` success, `1` command failure, `2` usage error, `3` clarification required,
+Every non-interactive command supports `--json`. Exit codes are stable: `0`
+success, `1` command failure, `2` usage error, `3` clarification required,
 `69` backend unavailable, and `130` cancellation.
 
 `eib improve` incorporates explicit human feedback into a new prompt bundle;
@@ -237,6 +243,27 @@ evidence needed to reproduce the result.
 deterministic fixtures. It establishes that those checks pass, not that a
 model response is high quality. Static evidence can support package integrity,
 but cannot by itself promote a prompt.
+
+### Local reproducibility proof
+
+`eib prove` turns complete static fixture evidence into a tamper-evident,
+workspace-local receipt for CI. It re-renders every stored target artifact and
+fails if even one byte, filename, MIME type, fixture check, or deterministic
+package assertion differs. The receipt stores hashes rather than raw prompt or
+fixture-output text, never changes the source package, and is created once at
+a new relative path with restrictive file permissions:
+
+```bash
+node apps/eib/dist/cli.js prove .eib/packages/research-memo \
+  --fixtures static-fixtures.json \
+  --output .eib/proofs/research-memo.json
+```
+
+This proves **local reproducibility only**. It does not call a model, inspect
+an installed Codex/Claude/desktop integration, test tools or side effects, or
+guarantee behavior after a provider update. A failed but complete run still
+writes its receipt and exits `1`, so CI retains the evidence while blocking the
+change. Incomplete or malformed evidence fails closed without a green receipt.
 
 `eib eval --mode proxy` can ask an authenticated local Codex or Claude CLI to
 judge cases when `--allow-execution` is explicit. This is independent evaluator
@@ -391,10 +418,10 @@ Run the complete release gate:
 npm run release:check
 ```
 
-This is a private source repository. The release gate verifies build, types,
+This is a public source repository. The release gate verifies build, types,
 lint, coverage, package contents, and high-severity dependency audit; it
 validates packages with `npm pack --dry-run` but does not publish them.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow,
 [CHANGELOG.md](CHANGELOG.md) for release history, and [RELEASE.md](RELEASE.md)
-for the private-repository release procedure.
+for the public release procedure.

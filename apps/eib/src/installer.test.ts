@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,5 +59,14 @@ describe("project runtime installer", () => {
     await mkdir(join(root, ".claude", "commands"), { recursive: true });
     await writeFile(command, "User command\n");
     await expect(installProjectRuntime(root)).rejects.toThrow("unowned install asset");
+  });
+
+  it("rejects symlinked managed directories before any install asset is created", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-install-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "eib-install-outside-"));
+    await symlink(outside, join(root, ".codex"));
+    await expect(installProjectRuntime(root)).rejects.toThrow("Refusing symlink in installation path");
+    await expect(readdir(outside)).resolves.toEqual([]);
+    await expect(readFile(join(root, ".eibrc.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

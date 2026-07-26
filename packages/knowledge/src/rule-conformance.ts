@@ -54,6 +54,30 @@ function textIncludes(
   return assertion(pattern.test(value), evidence, failure);
 }
 
+function textIncludesAll(
+  value: string,
+  terms: readonly string[],
+  evidence: string,
+  failure: string,
+): RuleAssertion {
+  const normalized = value.toLowerCase();
+  return assertion(terms.every((term) => normalized.includes(term.toLowerCase())), evidence, failure);
+}
+
+function textIncludesAnyTermGroup(
+  value: string,
+  groups: readonly (readonly string[])[],
+  evidence: string,
+  failure: string,
+): RuleAssertion {
+  const normalized = value.toLowerCase();
+  return assertion(
+    groups.some((terms) => terms.every((term) => normalized.includes(term.toLowerCase()))),
+    evidence,
+    failure,
+  );
+}
+
 export const ruleConformanceRegistry: Readonly<
   Record<string, RuleConformanceCheck>
 > = {
@@ -76,10 +100,11 @@ export const ruleConformanceRegistry: Readonly<
     ),
   ],
   "anthropic-clear-direct-instructions": (context) => [
-    ruleMentions(
-      context,
-      /objective|instructions.*output constraints/i,
-      "explicit task and output requirements",
+    textIncludesAnyTermGroup(
+      context.rule.rule,
+      [["objective"], ["instructions", "output constraints"]],
+      `${context.rule.id} explicitly encodes task and output requirements`,
+      `${context.rule.id} does not explicitly encode task and output requirements`,
     ),
   ],
   "anthropic-xml-structure": (context) => [
@@ -101,9 +126,9 @@ export const ruleConformanceRegistry: Readonly<
       `${context.profile.id} preserves native reasoning state`,
       `${context.profile.id} does not preserve native reasoning state`,
     ),
-    textIncludes(
+    textIncludesAll(
       context.profile.continuationPolicy,
-      /parts.*thought signatures/i,
+      ["parts", "thought signatures"],
       `${context.profile.id} preserves content parts and thought signatures`,
       `${context.profile.id} continuation policy omits native Gemini parts`,
     ),
@@ -123,9 +148,9 @@ export const ruleConformanceRegistry: Readonly<
       `${context.profile.id} exposes low, medium, and high effort with high as the default`,
       `${context.profile.id} does not encode the documented Grok 4.5 effort contract`,
     ),
-    textIncludes(
+    textIncludesAll(
       context.profile.forbiddenCombinations.join(" "),
-      /cannot be disabled.*presencePenalty.*frequencyPenalty.*stop/is,
+      ["cannot be disabled", "presencepenalty", "frequencypenalty", "stop"],
       `${context.profile.id} rejects disabled reasoning and incompatible parameters`,
       `${context.profile.id} omits a Grok 4.5 reasoning incompatibility`,
     ),
@@ -390,5 +415,3 @@ export function runKnowledgeRuleConformance(
     unappliedRuleIds,
   });
 }
-
-export const runAllRuleConformance = runKnowledgeRuleConformance;

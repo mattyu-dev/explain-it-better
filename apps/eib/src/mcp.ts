@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { EIB_VERSION } from "./args/types.js";
 import { createCliServices, type CliServices } from "./services.js";
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
@@ -68,12 +69,11 @@ function toolDefinitions(): Record<string, unknown> {
     tools: [
       {
         name: "eib_prepare",
-        description: "Compile a request into an EIB target-aware preview. Show its target, selected context, and assumptions, then wait for explicit user confirmation before calling eib_confirm.",
+        description: "Compile a request into an EIB target-aware preview for this server's configured workspace. Show its target, selected context metadata, and assumptions, then wait for explicit user confirmation before calling eib_confirm.",
         inputSchema: {
           type: "object",
           properties: {
             request: { type: "string", minLength: 1, description: "The user's request to compile." },
-            workspaceRoot: { type: "string", description: "Absolute local workspace path. Defaults to the MCP server working directory." },
             target: { type: "string", description: "Reviewed EIB target id. Required when the host cannot expose its exact active model metadata." },
             deep: { type: "boolean", description: "Scan safe tracked repository text only when the user explicitly asks for a full scan." },
           },
@@ -83,12 +83,11 @@ function toolDefinitions(): Record<string, unknown> {
       },
       {
         name: "eib_confirm",
-        description: "Confirm a previously prepared EIB brief after the user explicitly approves it. Returns the handoff instructions to follow as the active task.",
+        description: "Record acknowledgement of a previously prepared EIB brief. The host must call this only after explicit user approval; it returns the handoff instructions and does not itself execute the task.",
         inputSchema: {
           type: "object",
           properties: {
             runToken: { type: "string", minLength: 1, description: "Token returned by eib_prepare." },
-            workspaceRoot: { type: "string", description: "The same workspace used for eib_prepare." },
           },
           required: ["runToken"],
           additionalProperties: false,
@@ -118,7 +117,10 @@ async function callTool(
   if (!isRecord(params) || typeof params.name !== "string" || !isRecord(params.arguments)) {
     throw new Error("tools/call requires a tool name and object arguments.");
   }
-  const root = stringParameter(params.arguments, "workspaceRoot") ?? options.root ?? process.cwd();
+  if (Object.hasOwn(params.arguments, "workspaceRoot")) {
+    throw new Error("workspaceRoot is not accepted by MCP; launch the server with its approved workspace root.");
+  }
+  const root = realpathSync(resolve(options.root ?? process.cwd()));
   const services = (options.servicesForRoot ?? ((workspaceRoot) => createCliServices({ workspaceRoot })))(root);
   const signal = new AbortController().signal;
   switch (params.name) {
@@ -157,27 +159,29 @@ export async function handleMcpRequest(
     return error(null, -32600, "JSON-RPC request id must be a string, number, or null.");
   }
   const id = requestId(request);
+  const notification = request.id === undefined;
+  const reply = (result: Record<string, unknown>): Record<string, unknown> | undefined => notification ? undefined : result;
   try {
     switch (request.method) {
       case "initialize":
-        return response(id, {
+        return reply(response(id, {
           protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: { tools: { listChanged: false } },
-          serverInfo: { name: "explain-it-better", version: "0.2.1" },
-        });
+          serverInfo: { name: "explain-it-better", version: EIB_VERSION },
+        }));
       case "notifications/initialized":
       case "notifications/cancelled":
         return undefined;
       case "tools/list":
-        return response(id, toolDefinitions());
+        return reply(response(id, toolDefinitions()));
       case "tools/call":
-        return response(id, await callTool(request.params, options));
+        return reply(response(id, await callTool(request.params, options)));
       default:
-        return error(id, -32601, `Method ${JSON.stringify(request.method)} is not supported.`);
+        return reply(error(id, -32601, `Method ${JSON.stringify(request.method)} is not supported.`));
     }
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
-    return error(id, -32602, message);
+    return reply(error(id, -32602, message));
   }
 }
 

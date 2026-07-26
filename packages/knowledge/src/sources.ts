@@ -244,7 +244,3 @@ export function getKnowledgeSource(id: string): SourceManifestEntry {
   }
   return entry;
 }
-
-export function sourceHash(id: string): string {
-  return getKnowledgeSource(id).contentHash;
-}

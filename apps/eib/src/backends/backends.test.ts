@@ -16,9 +16,6 @@ import { z } from "zod";
 import {
   createClaudeBackend,
   createCodexBackend,
-  createHermesBackend,
-  createKimiBackend,
-  LocalBackendError,
 } from "./index.js";
 
 const cleanupPaths: string[] = [];
@@ -386,15 +383,4 @@ describe("safe local compiler backends", () => {
     ).rejects.toThrow("output limit must be a positive safe integer");
   });
 
-  it("fails closed for target-only Hermes and Kimi backends", async () => {
-    for (const backend of [createHermesBackend(), createKimiBackend()]) {
-      expect(backend.compilerReady).toBe(false);
-      await expect(
-        backend.runStructured({ prompt: "do work", schema: OutputSchema }),
-      ).rejects.toBeInstanceOf(LocalBackendError);
-      await expect(
-        backend.runStructured({ prompt: "do work", schema: OutputSchema }),
-      ).rejects.toMatchObject({ code: "target_only", backend: backend.id });
-    }
-  });
 });
