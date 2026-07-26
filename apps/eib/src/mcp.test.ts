@@ -21,11 +21,10 @@ describe("EIB MCP server", () => {
           name: "eib_prepare",
           arguments: {
             request: "Review this project architecture and produce a prioritized improvement plan.",
-            workspaceRoot: root,
             target: "openai-gpt-5.6-codex",
           },
         },
-      });
+      }, { root });
       expect(prepared).toMatchObject({ result: { isError: false } });
       const preparedResult = prepared?.result as { structuredContent: { data: { runToken: string; context: { entries: unknown[] } } } };
       expect(preparedResult.structuredContent.data.context.entries).not.toHaveLength(0);
@@ -36,9 +35,9 @@ describe("EIB MCP server", () => {
         method: "tools/call",
         params: {
           name: "eib_confirm",
-          arguments: { runToken: preparedResult.structuredContent.data.runToken, workspaceRoot: root },
+          arguments: { runToken: preparedResult.structuredContent.data.runToken },
         },
-      });
+      }, { root });
       const confirmedResult = confirmed?.result as {
         isError: boolean;
         structuredContent: { data: { handoff: string } };
@@ -57,5 +56,23 @@ describe("EIB MCP server", () => {
     await expect(handleMcpRequest({ jsonrpc: "2.0", id: 2, method: "resources/list" })).resolves.toMatchObject({
       error: { code: -32601 },
     });
+  });
+
+  it("binds every MCP call to the launch workspace and suppresses notifications", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-mcp-bound-"));
+    const outside = await mkdtemp(join(await realpath(tmpdir()), "eib-mcp-outside-"));
+    try {
+      const rejected = await handleMcpRequest({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "eib_prepare", arguments: { request: "Review this project.", workspaceRoot: outside } },
+      }, { root });
+      expect(JSON.stringify(rejected)).toContain("workspaceRoot is not accepted");
+      await expect(handleMcpRequest({ jsonrpc: "2.0", method: "tools/list" }, { root })).resolves.toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 });

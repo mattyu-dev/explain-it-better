@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,6 +52,27 @@ describe("runtime confirmation records", () => {
       }));
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects runtime storage redirected through a workspace symlink", async () => {
+    const root = await mkdtemp(join(tmpdir(), "eib-runtime-store-root-"));
+    const outside = await mkdtemp(join(tmpdir(), "eib-runtime-store-outside-"));
+    try {
+      await symlink(outside, join(root, ".eib"));
+      await expect(createRuntimeRun({
+        root,
+        rawRequest: "Review the project.",
+        targetId: "openai-gpt-5.6-codex",
+        context: { mode: "scoped", root, repository: { head: freshness.workspaceHead, status: "clean", changedEntries: 0 }, entries: [] },
+        assumptions: [],
+        handoff: "Do the review.",
+        freshness,
+      })).rejects.toThrow("Refusing symlink in runtime state path");
+      await expect(readdir(outside)).resolves.toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
     }
   });
 });

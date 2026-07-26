@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { runtimeAdapterCapabilities, runtimeTargetCapabilities } from "./runtime.js";
+import { safeWorkspacePath, replaceTextAtomically, writeNewText } from "./safe-path.js";
 
 const MANAGED_MARKER = "Managed by Explain It Better.";
 const CONFIG_VERSION = 1;
@@ -143,37 +144,46 @@ function isVerifiedManagedAsset(content: string, assetId: string): boolean {
   return declaredHash === sha256(withoutManagement);
 }
 
-async function installAsset(
+type AssetAction = "create" | "update" | "existing" | "preserve";
+
+interface PlannedAsset {
+  readonly asset: InstallAsset;
+  readonly path: string;
+  readonly action: AssetAction;
+}
+
+async function planAsset(
   root: string,
   asset: InstallAsset,
   options: InstallOptions,
-  result: { created: string[]; updated: string[]; existing: string[]; preserved: string[] },
-): Promise<void> {
-  const path = join(root, asset.path);
+): Promise<PlannedAsset> {
+  const path = await safeWorkspacePath(root, asset.path, "installation path");
   try {
     const current = await readFile(path, "utf8");
     if (!isEibOwnedAsset(current)) {
       throw new Error(`Refusing to overwrite unowned install asset ${asset.path}.`);
     }
     if (current === asset.content) {
-      result.existing.push(asset.path);
-      return;
+      return { asset, path, action: "existing" };
     }
     if (!options.update) {
-      result.existing.push(asset.path);
-      return;
+      return { asset, path, action: "existing" };
     }
     if (current !== asset.legacyContent && !isVerifiedManagedAsset(current, asset.assetId)) {
-      result.preserved.push(asset.path);
-      return;
+      return { asset, path, action: "preserve" };
     }
-    await writeFile(path, asset.content, { encoding: "utf8", mode: 0o644 });
-    result.updated.push(asset.path);
+    return { asset, path, action: "update" };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await mkdir(dirname(path), { recursive: true, mode: 0o755 });
-    await writeFile(path, asset.content, { encoding: "utf8", flag: "wx", mode: 0o644 });
-    result.created.push(asset.path);
+    return { asset, path, action: "create" };
+  }
+}
+
+async function applyAsset(plan: PlannedAsset): Promise<void> {
+  if (plan.action === "create") {
+    await writeNewText(plan.path, plan.asset.content, 0o644, "installation path");
+  } else if (plan.action === "update") {
+    await replaceTextAtomically(plan.path, plan.asset.content, 0o644, "installation path");
   }
 }
 
@@ -187,23 +197,29 @@ export async function installProjectRuntime(
   const updated: string[] = [];
   const existing: string[] = [];
   const preserved: string[] = [];
-  const configPath = join(root, ".eibrc.json");
+  const configPath = await safeWorkspacePath(root, ".eibrc.json", "installation path");
+  const assets = await installAssets();
+  // Plan every target before creating anything so an unowned later asset cannot
+  // leave a partially installed project runtime behind.
+  const plannedAssets = await Promise.all(assets.map((asset) => planAsset(root, asset, options)));
+  let configAction: "create" | "existing" = "existing";
   try {
     await readFile(configPath, "utf8");
-    existing.push(".eibrc.json");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    await writeFile(
-      configPath,
-      `${JSON.stringify({ version: CONFIG_VERSION }, null, 2)}\n`,
-      { encoding: "utf8", flag: "wx", mode: 0o644 },
-    );
+    configAction = "create";
+  }
+  if (configAction === "create") {
+    await writeNewText(configPath, `${JSON.stringify({ version: CONFIG_VERSION }, null, 2)}\n`, 0o644, "installation path");
     created.push(".eibrc.json");
+  } else {
+    existing.push(".eibrc.json");
   }
 
   const result = { created, updated, existing, preserved };
-  for (const asset of await installAssets()) {
-    await installAsset(root, asset, options, result);
+  for (const plan of plannedAssets) {
+    await applyAsset(plan);
+    result[plan.action === "create" ? "created" : plan.action === "update" ? "updated" : plan.action === "preserve" ? "preserved" : "existing"].push(plan.asset.path);
   }
   return {
     root,

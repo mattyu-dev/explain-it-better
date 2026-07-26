@@ -16,7 +16,7 @@
     "dev": "npm run dev --workspace @eib/cli",
     "lint": "eslint .",
     "pack:check": "node scripts/validate-package-contents.mjs",
-    "release:check": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run skills:check && npm run smoke:cli && npm run pack:check && npm audit --audit-level=high",
+    "release:check": "npm run typecheck && npm run lint && npm run skills:check && npm run test:coverage && npm run build && npm run skills:check && npm run smoke:cli && npm run pack:check && npm audit --audit-level=high",
     "skills:sync": "node scripts/sync-skill-distributions.mjs",
     "skills:check": "node scripts/sync-skill-distributions.mjs --check",
     "smoke:cli": "node scripts/smoke-cli.mjs",

@@ -6,7 +6,7 @@ perform the confirmed task. The core Skill works without a shell, plugin tool,
 repository, network connection, or host-specific API.
 
 ```text
-rough request → visible brief → explicit confirmation → same-agent handoff
+rough request → visible brief → explicit confirmation → same-conversation handoff
 ```
 
 The optional **Power mode** adds the local `eib` CLI, target-aware rendering,
@@ -21,10 +21,10 @@ excluded.
 
 Use the canonical bundle at
 [`skills/explain-it-better`](skills/explain-it-better). It is the source for
-the Codex/ChatGPT plugin and the Claude Code plugin:
+the Codex plugin and the Claude Code plugin:
 
 ```text
-ChatGPT/Codex: plugins/explain-it-better
+Codex plugin: plugins/explain-it-better
 Claude Code:  claude-plugin/explain-it-better
 ```
 
@@ -37,13 +37,26 @@ Install from the public marketplaces—no clone or shell is required for the
 core Skill:
 
 ```bash
-# Codex / ChatGPT Codex
+# Codex CLI
 codex plugin marketplace add mattyu-dev/explain-it-better
 codex plugin add explain-it-better@explain-it-better
 
 # Claude Code
 claude plugin marketplace add mattyu-dev/explain-it-better
 claude plugin install explain-it-better@explain-it-better
+```
+
+Verified hosts are Codex CLI and Claude Code. ChatGPT and Claude desktop/web
+surfaces may support Skill or plugin import, but availability and installation
+routes depend on the account, workspace policy, plan, and current client UI;
+they are not validated by these marketplace commands.
+
+Update marketplace installations with:
+
+```bash
+codex plugin marketplace upgrade explain-it-better
+claude plugin marketplace update explain-it-better
+claude plugin update explain-it-better@explain-it-better
 ```
 
 Start a new conversation after installation so the host can discover the
@@ -77,8 +90,9 @@ instruction file.
 
 | Surface | Core Skill | Power mode |
 | --- | --- | --- |
-| ChatGPT/Codex plugin | Yes | No local project access implied |
-| Claude Code plugin | Yes | Optional CLI commands |
+| Codex CLI marketplace | Verified | No local project access implied |
+| Claude Code marketplace | Verified | Optional CLI commands |
+| ChatGPT or Claude desktop/web import | Account- and UI-dependent | No local project access implied |
 | Any local MCP host | Not required | `eib-mcp` stdio server |
 | Remote chat apps | Yes, where they support Skill import | Requires a separately hosted authenticated MCP service for engine tools |
 
@@ -108,12 +122,13 @@ eib confirm <run-token>
 `/eib-deep "complex request"` only when an explicit full tracked-repository
 scan is appropriate. The CLI equivalent is `eib transform --deep …`.
 
-Scoped mode reads project instructions, manifests, and request-relevant files.
-Deep mode scans tracked readable text files and records every included or
-skipped path. Both reject ignored/generated directories, binary files,
-secret-named paths, and detected secret content. If the runtime cannot be
-identified exactly, EIB asks for `--for <target>` rather than pretending its
-prompt is target-specific.
+Scoped mode records metadata for project instructions, manifests, and
+request-relevant files; Power mode does not copy their raw text into a host
+response or runtime record. Deep mode scans tracked readable text files and
+records every included or skipped path. Both reject ignored/generated
+directories, binary files, secret-named paths, and conservative detected
+credential content. If the runtime cannot be identified exactly, EIB asks for
+`--for <target>` rather than pretending its prompt is target-specific.
 
 Start with a demand and target. EIB parses the demand into visible fields such
 as outcome, audience, deliverable, constraints, inputs, exclusions, success
@@ -391,10 +406,10 @@ Run the complete release gate:
 npm run release:check
 ```
 
-This is a private source repository. The release gate verifies build, types,
+This is a public source repository. The release gate verifies build, types,
 lint, coverage, package contents, and high-severity dependency audit; it
 validates packages with `npm pack --dry-run` but does not publish them.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow,
 [CHANGELOG.md](CHANGELOG.md) for release history, and [RELEASE.md](RELEASE.md)
-for the private-repository release procedure.
+for the public release procedure.
