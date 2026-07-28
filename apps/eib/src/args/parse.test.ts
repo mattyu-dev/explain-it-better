@@ -252,6 +252,33 @@ describe("parseArgs", () => {
     );
   });
 
+  it("parses a guided quickstart as a confirmation-gated preview", () => {
+    expect(parseArgs(["quickstart"])).toEqual({
+      name: "quickstart",
+      global: { json: false },
+      brief: "Review this project's architecture and deliver a prioritized Markdown list of concrete next steps for a maintainer.",
+      deep: false,
+      usingExample: true,
+    });
+    expect(parseArgs([
+      "quickstart",
+      "Review the API boundary",
+      "--deep",
+      "--for",
+      "openai-gpt-5.6-codex",
+    ])).toEqual({
+      name: "quickstart",
+      global: { json: false },
+      brief: "Review the API boundary",
+      deep: true,
+      usingExample: false,
+      explicitTarget: "openai-gpt-5.6-codex",
+    });
+    expect(() => parseArgs(["quickstart", "request", "--brief", "another request"])).toThrow(
+      "Provide the request either positionally or with --brief, not both",
+    );
+  });
+
   it("rejects retired agent-runtime commands", () => {
     expect(() => parseArgs(["approve", "package"])).toThrow("Unknown command: approve");
   });

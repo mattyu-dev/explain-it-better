@@ -144,6 +144,30 @@ describe("runCli", () => {
     ).resolves.toBe(ExitCode.success);
   });
 
+  it("passes the first-run flow to services without confirming it", async () => {
+    const output = capture();
+    const quickstartServices: CliServices = {
+      listTargets: () => [],
+      execute(command) {
+        expect(command).toMatchObject({
+          name: "quickstart",
+          brief: "Review this project's architecture and deliver a prioritized Markdown list of concrete next steps for a maintainer.",
+          usingExample: true,
+        });
+        return Promise.resolve({
+          status: "ok",
+          message: "Quickstart preview ready.",
+          data: { runToken: "preview-token" },
+          exitCode: ExitCode.success,
+        });
+      },
+    };
+
+    await expect(runCli(["quickstart"], output.io, quickstartServices)).resolves.toBe(ExitCode.success);
+    expect(output.stdout()).toContain("Quickstart preview ready.");
+    expect(output.stdout()).not.toContain("confirmed handoff");
+  });
+
   it("keeps candidate-promotion evidence machine-readable", async () => {
     const output = capture();
     const optimizeServices: CliServices = {

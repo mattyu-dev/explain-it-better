@@ -11,7 +11,7 @@
    with Codex.
 2. Run `npm ci` to install the lockfile-resolved dependencies.
 3. Make a focused change with tests in the owning workspace.
-4. Run `npm run release:check` before requesting review.
+4. Run `npm run release:check` before opening a pull request.
 
 The release check runs type checking, linting, coverage tests, the production
 build, a dry-run package-content check, and `npm audit --audit-level=high`.
@@ -49,7 +49,7 @@ It does not publish packages.
   neither can activate rules, profiles, capabilities, or discovered models.
 - Treat a scheduled knowledge-refresh artifact as evidence, not an update.
   The workflow is deliberately read-only; source drift or an unavailable
-  source must be investigated and promoted through a reviewed pull request
+  source must be investigated and promoted through a pull request
   with the normal release gate.
 - Do not commit credentials, generated `.eib/` packages, `dist/`, coverage,
   or `node_modules/`.
@@ -61,7 +61,8 @@ For changes to demand parsing, target profiles, candidate generation,
 evaluation, native execution, or security policy, include the affected
 safety/verification boundary explicitly. State whether the change affects a
 best-tested claim and add regression tests for that evidence contract. Require
-a green CI run and at least one reviewer before merging to `main`.
+the green `Release gate (Node 22)` check and resolved review conversations
+before merging to `main`.
 
 ## Reporting vulnerabilities
 

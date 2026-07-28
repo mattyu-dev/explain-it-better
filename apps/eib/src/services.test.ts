@@ -235,6 +235,67 @@ describe("CLI services", () => {
     }
   });
 
+  it("guides a first run through a preview without bypassing confirmation", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-quickstart-"));
+    await writeFile(join(root, "package.json"), '{"name":"runtime-fixture"}\n', "utf8");
+    const services = createCliServices({
+      workspaceRoot: root,
+      runtimeEnvironment: { CODEX_THREAD_ID: "fixture-thread", CODEX_MODEL: "gpt-5.6" },
+    });
+    try {
+      const preview = await services.execute(
+        {
+          name: "quickstart",
+          global: { json: false },
+          brief: "Review this project's architecture and deliver a prioritized Markdown list of concrete next steps for a maintainer.",
+          deep: false,
+          usingExample: true,
+        },
+        new AbortController().signal,
+      );
+      expect(preview).toMatchObject({
+        status: "ok",
+        data: { quickstart: { usingExample: true }, target: { id: "openai-gpt-5.6-codex" } },
+      });
+      expect(preview.display).toContain("# EIB quickstart");
+      expect(preview.display).toContain("No work has started.");
+      expect(preview.display).toMatch(/eib confirm [a-f0-9-]+/u);
+      expect(preview.display).not.toContain("# EIB confirmed handoff");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a transparent reviewed fallback when quickstart has no runtime metadata", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-quickstart-fallback-"));
+    await writeFile(join(root, "package.json"), '{"name":"runtime-fixture"}\n', "utf8");
+    const services = createCliServices({ workspaceRoot: root, runtimeEnvironment: {} });
+    try {
+      const preview = await services.execute(
+        {
+          name: "quickstart",
+          global: { json: false },
+          brief: "Review this project's architecture and deliver a prioritized Markdown list of concrete next steps for a maintainer.",
+          deep: false,
+          usingExample: true,
+        },
+        new AbortController().signal,
+      );
+      expect(preview).toMatchObject({
+        status: "ok",
+        data: {
+          target: { id: "openai-gpt-5.6-codex" },
+          quickstart: { fallbackTarget: "openai-gpt-5.6-codex" },
+        },
+      });
+      expect(preview.display).toContain("No runtime was detected");
+      expect(preview.display).toContain("eib confirm");
+      expect(preview.display).not.toContain("# EIB confirmed handoff");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("requires a fresh transform when selected context changes before confirmation", async () => {
     const root = await mkdtemp(join(await realpath(tmpdir()), "eib-runtime-stale-"));
     await writeFile(join(root, "AGENTS.md"), "Run tests before changing source files.\n", "utf8");

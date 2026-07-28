@@ -17,8 +17,8 @@ appropriate GitHub Release), never an implied `npm publish` operation.
 
 1. Keep the public repository's visibility, description, support route, and
    release links current before advertising installation commands.
-2. Protect `main`: require a pull request,
-   one approving review, and the `Release gate (Node 22)` status check.
+2. Protect `main`: enforce the strict `Release gate (Node 22)` status check,
+   resolved review conversations, no force pushes, and no branch deletion.
 3. Grant the minimum repository access needed by maintainers and CI. The
    workflow needs only read access to repository contents.
 
@@ -43,8 +43,8 @@ appropriate GitHub Release), never an implied `npm publish` operation.
 8. Review the public optimizer claims against the shipped behavior: structured
    demand preservation, target-aware variants, demand-specific held-out
    evaluation, evidence-bound promotion, and any native execution boundary.
-9. Open a pull request. Merge only after the CI release gate and required
-   review are green.
+9. Open a pull request. Merge only after the CI release gate is green and all
+   review conversations are resolved.
 10. Tag the merged commit as `vX.Y.Z` and create a GitHub Release whose notes
    match the changelog entry and whose visibility matches the repository.
 

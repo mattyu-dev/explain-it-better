@@ -45,6 +45,9 @@ const FLAG_OPTIONS = new Set([
   "version",
 ]);
 
+/** A concrete, read-only request lets a new user see the whole safe flow. */
+const QUICKSTART_EXAMPLE = "Review this project's architecture and deliver a prioritized Markdown list of concrete next steps for a maintainer.";
+
 function tokenize(argv: readonly string[]): ParsedTokens {
   const positionals: string[] = [];
   const options = new Map<string, string[]>();
@@ -242,6 +245,24 @@ export function parseArgs(argv: readonly string[]): CliCommand {
           : { brief }),
         runtime: "auto",
         deep: parsed.flags.has("deep"),
+        ...(explicitTarget === undefined ? {} : { explicitTarget }),
+      };
+    }
+    case "quickstart": {
+      rejectOptions(parsed, ["brief", "for"], ["deep"]);
+      const explicitBrief = one(parsed, "brief");
+      const positionalBrief = parsed.positionals.join(" ").trim() || undefined;
+      if (explicitBrief !== undefined && positionalBrief !== undefined) {
+        throw new UsageError("Provide the request either positionally or with --brief, not both");
+      }
+      const brief = explicitBrief ?? positionalBrief ?? QUICKSTART_EXAMPLE;
+      const explicitTarget = one(parsed, "for");
+      return {
+        name: "quickstart",
+        global,
+        brief,
+        deep: parsed.flags.has("deep"),
+        usingExample: explicitBrief === undefined && positionalBrief === undefined,
         ...(explicitTarget === undefined ? {} : { explicitTarget }),
       };
     }

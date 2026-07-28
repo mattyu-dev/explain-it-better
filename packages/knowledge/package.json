@@ -1,6 +1,6 @@
 {
   "name": "@eib/knowledge",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",
@@ -23,7 +23,7 @@
     "test": "vitest run --root ../.. packages/knowledge/src/knowledge.test.ts"
   },
   "dependencies": {
-    "@eib/core": "0.2.1",
+    "@eib/core": "0.2.2",
     "zod": "^4.0.0"
   }
 }
