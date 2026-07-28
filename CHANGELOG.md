@@ -6,8 +6,17 @@ All notable changes to this repository are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-28
+
 ### Added
 
+- Added `eib quickstart`, a confirmation-gated first-run preview that uses a
+  concrete read-only example when no request is supplied. It respects an exact
+  runtime or explicit `--for` target and transparently selects a reviewed
+  fallback only when a fresh shell has neither.
+- Added a copyable `examples/first-success` walkthrough and a release-gated
+  verifier for the complete local lifecycle: project install, preview, human
+  confirmation, and agent handoff.
 - Added `eib prove`, a local-only reproducibility receipt for complete static
   fixture evidence. It binds the frozen package, evaluation suite, knowledge
   revision, and every re-rendered compiled artifact with tamper-evident hashes,
@@ -16,6 +25,12 @@ All notable changes to this repository are documented here. The format follows
 
 ### Fixed
 
+- Made the first-use documentation distinguish the no-shell marketplace Skill
+  from source-installed Power mode, including the fact that Power mode is not
+  an npm package.
+- Aligned contributor and release policy with the live branch protection:
+  strict release CI and resolved conversations, without an approval-count
+  requirement.
 - Bound local Power-mode MCP operations to their launch workspace, made project
   context metadata-only, and hardened managed writes against symlink escapes.
 - Removed unreachable backend factories and unused distribution metadata while

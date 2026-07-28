@@ -1,6 +1,6 @@
 import type { IntentContract } from "@eib/core";
 
-export const EIB_VERSION = "0.2.1";
+export const EIB_VERSION = "0.2.2";
 
 export const ExitCode = {
   success: 0,
@@ -38,6 +38,19 @@ export type CliCommand =
       runtime: "auto";
       deep: boolean;
       /** Explicit destination only when exporting a brief for another agent. */
+      explicitTarget?: string;
+    }
+  | {
+      /**
+       * A first-run wrapper around transform. It always produces a preview and
+       * never confirms or hands work to an agent by itself.
+       */
+      name: "quickstart";
+      global: GlobalOptions;
+      brief: string;
+      deep: boolean;
+      /** True only when the built-in safe example request was used. */
+      usingExample: boolean;
       explicitTarget?: string;
     }
   | { name: "confirm"; global: GlobalOptions; token: string }

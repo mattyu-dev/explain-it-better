@@ -16,6 +16,22 @@ Options:
   --deep               Explicit full tracked-repository context scan
   --brief <text>       Request (alternative to positional text)
   --json               Emit the complete preview as one JSON document`,
+  quickstart: `Usage: eib quickstart [request] [options]
+
+Run a safe first preview. With no request, EIB uses a read-only project-review
+example so you can see target selection, scoped context, assumptions, and the
+confirmation step. If no runtime or project target is available, Quickstart
+uses the reviewed \`openai-gpt-5.6-codex\` profile and tells you; \`--for\` overrides
+that fallback. It does not execute work or confirm the result.
+
+Options:
+  --brief <text>       Request (alternative to positional text)
+  --for <target>       Select a reviewed target when no runtime is detected
+  --deep               Explicit full tracked-repository context scan
+  --json               Emit the complete preview as one JSON document
+
+After reviewing the preview, run the displayed \`eib confirm <run-token>\` command
+only when you want the agent to receive the handoff.`,
   confirm: `Usage: eib confirm <run-token> [--json]
 
 Confirm a transformed brief and return the exact handoff instructions for the
@@ -116,6 +132,7 @@ export function renderHelp(topic?: string): string {
 Usage:
   eib                              Open the interactive terminal UI
   eib install                      Install project-local runtime assets
+  eib quickstart [request]         Try one safe preview and learn the confirmation flow
   eib transform [request]          Compile a runtime-aware agent brief
   eib confirm <run-token>          Confirm a preview and receive its handoff
   eib new [demand] [options]       Turn a demand into a prompt package

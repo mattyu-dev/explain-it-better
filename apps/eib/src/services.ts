@@ -66,6 +66,21 @@ import { CliServiceError, type CliServiceResult } from "./service-contracts.js";
 import type { CliCommand, ExecutionBackend } from "./args/types.js";
 import { ExitCode as Codes } from "./args/types.js";
 
+/** A reviewed profile makes the first-run preview usable outside a native host. */
+const QUICKSTART_FALLBACK_TARGET = "openai-gpt-5.6-codex";
+
+function hasNoRuntimeResolution(data: unknown): boolean {
+  if (typeof data !== "object" || data === null || !("resolution" in data)) return false;
+  const resolution = data.resolution;
+  return (
+    typeof resolution === "object" &&
+    resolution !== null &&
+    "status" in resolution &&
+    resolution.status === "needs_input" &&
+    (!("runtime" in resolution) || resolution.runtime === undefined)
+  );
+}
+
 export { CliServiceError, type CliServiceResult } from "./service-contracts.js";
 
 export interface CliServices {
@@ -879,6 +894,48 @@ export function createCliServices(options: CliServiceOptions = {}): CliServices 
             environment: runtimeEnvironment,
             compilePrompt,
           });
+        case "quickstart": {
+          const transform = (explicitTarget?: string) => executeRuntimeTransform({
+            name: "transform",
+            global: command.global,
+            brief: command.brief,
+            runtime: "auto",
+            deep: command.deep,
+            ...(explicitTarget === undefined ? {} : { explicitTarget }),
+          }, signal, {
+            root: workspaceRoot,
+            environment: runtimeEnvironment,
+            compilePrompt,
+          });
+          let result = await transform(command.explicitTarget);
+          const usedFallback = command.explicitTarget === undefined && hasNoRuntimeResolution(result.data);
+          if (usedFallback) {
+            result = await transform(QUICKSTART_FALLBACK_TARGET);
+          }
+          if (result.status !== "ok") return result;
+          const intro = [
+            command.usingExample
+              ? "This is the built-in read-only project-review example. Re-run `eib quickstart \"your request\"` to use your own request."
+              : "This preview was created from your request.",
+            ...(usedFallback
+              ? [`No runtime was detected, so Quickstart selected the reviewed fallback target \`${QUICKSTART_FALLBACK_TARGET}\`. Use \`--for <target>\` to override it.`]
+              : []),
+          ].join("\n");
+          return {
+            ...result,
+            message: `Quickstart preview ready. ${result.message}`,
+            data: {
+              ...(typeof result.data === "object" && result.data !== null ? result.data : {}),
+              quickstart: {
+                usingExample: command.usingExample,
+                ...(usedFallback ? { fallbackTarget: QUICKSTART_FALLBACK_TARGET } : {}),
+              },
+            },
+            ...(result.display === undefined
+              ? {}
+              : { display: ["# EIB quickstart", "", intro, "No work has started.", "", result.display].join("\n") }),
+          };
+        }
         case "confirm":
           return executeRuntimeConfirmation(command, signal, workspaceRoot);
         case "new": {

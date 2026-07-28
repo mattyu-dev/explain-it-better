@@ -17,18 +17,57 @@ Power mode's reviewed knowledge pack covers OpenAI, Anthropic, Gemini, xAI,
 DeepSeek, Meta Llama, Mistral, and Kimi/Moonshot. Cohere is intentionally
 excluded.
 
-## Start here
+## Get a first result
 
-Choose the smallest surface that solves your problem:
+Choose one path. Both preserve the same boundary: EIB prepares a visible brief;
+the requested work starts only after a person confirms it.
 
-- **Better-scoped request:** install the portable Skill, state your request,
-  review its visible brief, and explicitly confirm before work begins.
-- **Project-aware agent preparation:** install Power mode, run
-  `eib transform "your request"`, review the target and selected context, then
-  run `eib confirm <run-token>` only after approval.
-- **Prompt optimization with evidence:** use the advanced Power-mode workflow
-  (`new`, `eval`, `optimize`, `prove`, and `export`) described below. It is
-  optional and never changes the portable Skill contract.
+### A normal agent conversation — no shell required
+
+Install the portable Skill from the Codex or Claude Code marketplace below.
+Then start a new conversation and send a concrete request such as:
+
+> Use Explain It Better to turn this into a confirmed brief: review our
+> architecture, identify the three highest-value fixes, and give an ordered
+> implementation plan. Success means the plan names the relevant files and
+> verification for each fix.
+
+Review the visible brief and assumptions. Reply **Confirm** only when they are
+right; the same agent then carries out the confirmed work. This is the fastest
+path for better-scoped requests.
+
+### A project-aware agent brief — local Power mode
+
+Power mode is source-installed; it is deliberately **not published to npm**.
+Clone this repository, then install the local CLI once:
+
+```bash
+git clone https://github.com/mattyu-dev/explain-it-better.git
+cd explain-it-better
+npm ci
+npm run build
+npm link --workspace @eib/cli
+```
+
+From the project that an agent should prepare, run a first preview. The explicit
+target keeps this first run deterministic even outside a host that exposes its
+exact model metadata:
+
+```bash
+eib quickstart \
+  "Review this project, identify the three highest-value fixes, and give an ordered implementation plan with verification." \
+  --for openai-gpt-5.6-codex
+```
+
+Review the target, selected context, and assumptions in the preview. It prints
+the exact `eib confirm <run-token>` command; run that only after approval. The
+result is an execution handoff for the active agent, not an automatic code
+change. See the copyable [first-success walkthrough](examples/first-success/README.md)
+for the complete lifecycle.
+
+The optimizer, evidence, knowledge, and MCP workflows below are advanced Power
+mode capabilities; they are optional and never change the portable Skill's
+confirmation contract.
 
 ## Install the Skill
 
@@ -79,10 +118,12 @@ marketplace source (`codex plugin marketplace add .` or
 
 ## Power mode: local project integration
 
-Requirements are Node.js 22+ and npm 10+.
+Requirements are Node.js 22+ and npm 10+. Power mode comes from a source
+checkout, not `npm install explain-it-better`; all workspace packages are
+intentionally private.
 
 ```bash
-npm install
+npm ci
 npm run build
 npm link --workspace @eib/cli
 ```
@@ -113,7 +154,18 @@ After upgrading EIB, run `eib install --update`. Every generated host asset is
 versioned and fingerprinted; EIB refreshes only assets whose fingerprint shows
 they were not edited locally, and reports modified assets it safely preserves.
 
-For deterministic, target-aware local preparation, transform a natural request:
+For deterministic, target-aware local preparation, use the short first-run
+command or transform a natural request directly:
+
+```bash
+eib quickstart "review the architecture and tell me what to update" --for openai-gpt-5.6-codex
+```
+
+`quickstart` displays a confirmation-gated preview and never starts work. When
+there is no runtime metadata, it says that it selected the reviewed
+`openai-gpt-5.6-codex` fallback; use `--for` to choose another reviewed target.
+
+For full control, run `transform` directly:
 
 ```bash
 eib transform "review the architecture and tell me what to update" --runtime auto
@@ -236,7 +288,7 @@ evaluation cases, scores, provenance, and verification report.
 The built CLI is the command reference; it is validated in the release gate.
 Run `eib --help`, then `eib <command> --help`, for the exact syntax supported
 by the installed version. The command groups are: project integration
-(`install`, `transform`, `confirm`); prompt packages (`new`, `improve`,
+(`install`, `quickstart`, `transform`, `confirm`); prompt packages (`new`, `improve`,
 `compile`, `export`); evidence (`optimize`, `eval`, `prove`); local readiness
 (`preferences`, `doctor`); and reviewed knowledge (`knowledge`).
 
