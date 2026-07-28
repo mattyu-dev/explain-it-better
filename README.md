@@ -42,7 +42,7 @@ Power mode is source-installed; it is deliberately **not published to npm**.
 Clone this repository, then install the local CLI once:
 
 ```bash
-git clone https://github.com/mattyu-dev/explain-it-better.git
+git clone --branch v0.2.3 --depth 1 https://github.com/mattyu-dev/explain-it-better.git
 cd explain-it-better
 npm ci
 npm run build
@@ -89,8 +89,8 @@ Install from the public marketplaces—no clone or shell is required for the
 core Skill:
 
 ```bash
-# Codex CLI
-codex plugin marketplace add mattyu-dev/explain-it-better
+# Codex CLI — pin the reviewed v0.2.3 release
+codex plugin marketplace add mattyu-dev/explain-it-better --ref v0.2.3
 codex plugin add explain-it-better@explain-it-better
 
 # Claude Code
@@ -110,6 +110,11 @@ codex plugin marketplace upgrade explain-it-better
 claude plugin marketplace update explain-it-better
 claude plugin update explain-it-better@explain-it-better
 ```
+
+For Codex, add a new marketplace with the next published `--ref vX.Y.Z` rather
+than silently moving an existing pinned installation to development `main`.
+Claude Code marketplace snapshots should likewise be updated only after the
+corresponding GitHub Release is published.
 
 Start a new conversation after installation so the host can discover the
 Skill. For development or offline testing, add the checkout itself as the

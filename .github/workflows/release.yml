@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Validate and publish release (Node 22)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify tag and shipped versions agree
+        run: node scripts/validate-release-integrity.mjs --tag "$GITHUB_REF_NAME"
+      - name: Verify tagged distribution source
+        run: node scripts/verify-release-distribution.mjs --remote origin
+      - name: Run the release gate
+        run: npm run release:check
+      - name: Create deterministic source archive and checksum
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          asset_dir="$RUNNER_TEMP/eib-release-assets"
+          archive_name="explain-it-better-${tag}.tar.gz"
+          checksum_name="${archive_name}.sha256"
+          mkdir -p "$asset_dir"
+          git archive --format=tar --prefix="explain-it-better-${tag}/" "$GITHUB_SHA" | gzip -n -9 > "$asset_dir/$archive_name"
+          (
+            cd "$asset_dir"
+            sha256sum "$archive_name" > "$checksum_name"
+          )
+          echo "asset_dir=$asset_dir" >> "$GITHUB_OUTPUT"
+          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
+          echo "checksum_name=$checksum_name" >> "$GITHUB_OUTPUT"
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET_DIR: ${{ steps.archive.outputs.asset_dir }}
+          ARCHIVE_NAME: ${{ steps.archive.outputs.archive_name }}
+          CHECKSUM_NAME: ${{ steps.archive.outputs.checksum_name }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET_DIR/$ARCHIVE_NAME" "$ASSET_DIR/$CHECKSUM_NAME" --clobber
+          else
+            gh release create "$TAG" "$ASSET_DIR/$ARCHIVE_NAME" "$ASSET_DIR/$CHECKSUM_NAME" \
+              --verify-tag --title "$TAG" --generate-notes
+          fi

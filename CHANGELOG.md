@@ -6,6 +6,30 @@ All notable changes to this repository are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-28
+
+### Added
+
+- Protected `v*` tags and added a tag-triggered Release workflow. It verifies
+  the exact tag and every shipped version, reruns the release gate, and attaches
+  a deterministic source archive with its SHA-256 checksum to the GitHub
+  Release.
+- Added a post-release distribution verifier that proves the remote tag, local
+  checkout, source-only Power-mode contract, and all Codex/Claude Skill
+  distributions agree.
+- Added a facilitator-only, privacy-preserving five-participant first-use
+  study protocol. It records only a de-identified aggregate; individual
+  sessions are never posted to a public issue form.
+
+### Fixed
+
+- Restored the canonical Apache-2.0 license text so GitHub can recognize the
+  repository license correctly.
+- Hardened CI and release checkout against persisted credentials and bounded
+  both jobs to twenty minutes.
+- Pinned the documented Codex marketplace installation to the reviewed release
+  tag instead of silently following development `main`.
+
 ## [0.2.2] - 2026-07-28
 
 ### Added

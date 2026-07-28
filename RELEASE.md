@@ -19,8 +19,10 @@ appropriate GitHub Release), never an implied `npm publish` operation.
    release links current before advertising installation commands.
 2. Protect `main`: enforce the strict `Release gate (Node 22)` status check,
    resolved review conversations, no force pushes, and no branch deletion.
-3. Grant the minimum repository access needed by maintainers and CI. The
-   workflow needs only read access to repository contents.
+3. Allow only the designated release owner to create `v*` tags and protect
+   those tags from update and deletion. The tag-release workflow has the
+   minimum additional `contents: write` permission needed to attach the checked
+   source archive after validation succeeds.
 
 ## Cut a release
 
@@ -35,8 +37,7 @@ appropriate GitHub Release), never an implied `npm publish` operation.
 5. Run `npm link --workspace @eib/cli` and verify both commands resolve in a
    fresh interactive shell: `eib --version` and `eib-mcp`.
 6. Validate the host adapters with the checked-in commands:
-   `npm run skills:check`,
-   `node claude-plugin/explain-it-better/scripts/validate.mjs`, and
+   `npm run plugins:check`, and
    `claude plugin validate ./claude-plugin/explain-it-better` for Claude Code.
 7. Install the local Codex marketplace once and confirm `codex plugin list`
    exposes `explain-it-better` without an MCP dependency.
@@ -45,13 +46,19 @@ appropriate GitHub Release), never an implied `npm publish` operation.
    evaluation, evidence-bound promotion, and any native execution boundary.
 9. Open a pull request. Merge only after the CI release gate is green and all
    review conversations are resolved.
-10. Tag the merged commit as `vX.Y.Z` and create a GitHub Release whose notes
-   match the changelog entry and whose visibility matches the repository.
+10. Create and push an annotated `vX.Y.Z` tag for the merged commit. The
+    protected tag triggers the Release workflow, which verifies the exact tag,
+    runs the full release gate, then creates or updates the GitHub Release with
+    a deterministic source archive and SHA-256 checksum. Do not create a
+    release manually before that workflow succeeds.
 
 ## After release
 
-- Verify the tag resolves to the merged commit and the GitHub Release has the
-  intended visibility.
+- Wait for the Release workflow to succeed, then run
+  `npm run release:distribution` from the tagged checkout to prove the remote
+  tag, private Power-mode source contract, and plugin distributions all match.
+- Verify the GitHub Release has the intended visibility and both the source
+  archive and SHA-256 checksum assets.
 - If the repository is public, test both documented install paths from a clean
   machine or isolated user configuration before announcing it. If it is still
   private, do not present it as an installable public marketplace.
