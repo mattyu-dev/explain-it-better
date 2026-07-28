@@ -1,6 +1,6 @@
 import type { IntentContract } from "@eib/core";
 
-export const EIB_VERSION = "0.2.2";
+export const EIB_VERSION = "0.2.3";
 
 export const ExitCode = {
   success: 0,

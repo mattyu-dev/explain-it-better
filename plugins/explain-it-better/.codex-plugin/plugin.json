@@ -1,6 +1,6 @@
 {
   "name": "explain-it-better",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A standalone skill that turns rough requests into confirmation-gated briefs before work begins.",
   "author": {
     "name": "Matt"
